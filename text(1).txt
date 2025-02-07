@@ -1,0 +1,950 @@
+--[[
+    Script amélioré pour l'environnement UNC Test
+    Améliorations incluses :
+      - Vérification de la présence du GUI avant création
+      - Gestion centralisée et colorisée des logs avec RichText
+      - Mesure du temps d'exécution de chaque test
+      - Commentaires détaillés et code plus lisible/modulaire
+]]
+
+----------------------------
+-- Services et variables globales
+----------------------------
+local CoreGui = game:GetService("CoreGui")
+local TextService = game:GetService("TextService")
+local RunService = game:GetService("RunService")
+
+-- Vérifier si le GUI UNC_Test_GUI existe déjà pour éviter les doublons
+if CoreGui:FindFirstChild("UNC_Test_GUI") then
+    warn("Le GUI UNC_Test_GUI existe déjà. Arrêt du script.")
+    return
+end
+
+-- Compteurs pour les tests
+local passes, fails, undefined = 0, 0, 0
+local running = 0
+
+-- Stockage des logs dans un tableau pour mise à jour simplifiée
+local logEntries = {}
+
+----------------------------
+-- Fonction utilitaire : Conversion Color3 -> Hex pour RichText
+----------------------------
+local function colorToHex(color)
+    local r = math.floor(color.R * 255)
+    local g = math.floor(color.G * 255)
+    local b = math.floor(color.B * 255)
+    return string.format("#%02X%02X%02X", r, g, b)
+end
+
+----------------------------
+-- Création de l'interface graphique
+----------------------------
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "UNC_Test_GUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = CoreGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 600, 0, 400)
+mainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 50)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "UNC Environment Check"
+titleLabel.TextColor3 = Color3.new(1, 1, 1)
+titleLabel.TextScaled = true
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.Parent = mainFrame
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 25, 0, 25)
+closeButton.Position = UDim2.new(1, -30, 0, 5)
+closeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.new(1, 1, 1)
+closeButton.Font = Enum.Font.SourceSansBold
+closeButton.TextScaled = true
+closeButton.Parent = mainFrame
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+end)
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.Size = UDim2.new(1, -20, 1, -100)
+logFrame.Position = UDim2.new(0, 10, 0, 60)
+logFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+logFrame.BorderSizePixel = 0
+logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.Parent = mainFrame
+
+local logText = Instance.new("TextLabel")
+logText.Size = UDim2.new(1, -10, 1, 0)
+logText.Position = UDim2.new(0, 5, 0, 0)
+logText.BackgroundTransparency = 1
+logText.Text = ""
+logText.TextColor3 = Color3.new(1, 1, 1)
+logText.TextXAlignment = Enum.TextXAlignment.Left
+logText.TextYAlignment = Enum.TextYAlignment.Top
+logText.TextWrapped = true
+logText.RichText = true
+logText.Font = Enum.Font.Code
+logText.TextSize = 18
+logText.Parent = logFrame
+
+local summaryLabel = Instance.new("TextLabel")
+summaryLabel.Size = UDim2.new(1, 0, 0, 40)
+summaryLabel.Position = UDim2.new(0, 0, 1, -40)
+summaryLabel.BackgroundTransparency = 1
+summaryLabel.Text = "Summary: "
+summaryLabel.TextColor3 = Color3.new(1, 1, 1)
+summaryLabel.TextScaled = true
+summaryLabel.Font = Enum.Font.SourceSansBold
+summaryLabel.Parent = mainFrame
+
+----------------------------
+-- Fonction utilitaire : Ajout d'un log
+----------------------------
+local function appendLog(text, color)
+    if color then
+        text = string.format('<font color="%s">%s</font>', colorToHex(color), text)
+    end
+    table.insert(logEntries, text)
+    logText.Text = table.concat(logEntries, "\n")
+    -- Mise à jour dynamique de la taille du canvas pour permettre le scrolling
+    local textSize = TextService:GetTextSize(logText.Text, logText.TextSize, logText.Font, Vector2.new(logFrame.AbsoluteSize.X, math.huge))
+    logFrame.CanvasSize = UDim2.new(0, 0, 0, textSize.Y + 10)
+end
+
+----------------------------
+-- Fonction utilitaire : Mesure du temps d'exécution d'un test
+----------------------------
+local function measureExecution(callback)
+    local startTime = os.clock()
+    local success, result = pcall(callback)
+    local duration = os.clock() - startTime
+    return success, result, duration
+end
+
+----------------------------
+-- Fonctions spécifiques à l'environnement UNC
+----------------------------
+local function getGlobal(path)
+    local value = getfenv(0)
+    while value ~= nil and path ~= "" do
+        local name, nextValue = string.match(path, "^([^.]+)%.?(.*)$")
+        value = value[name]
+        path = nextValue
+    end
+    return value
+end
+
+----------------------------
+-- Fonction de test : exécute le callback en mesurant le temps, met à jour les compteurs et affiche le résultat
+----------------------------
+local function test(name, aliases, callback)
+    running = running + 1
+    task.spawn(function()
+        local startTime = os.clock()
+        if not callback then
+            appendLog("⏺️ " .. name)
+        elseif not getGlobal(name) then
+            fails = fails + 1
+            appendLog("⛔ " .. name .. " (non défini)", Color3.fromRGB(255, 100, 100))
+        else
+            local success, message, duration = measureExecution(callback)
+            if success then
+                passes = passes + 1
+                appendLog(string.format("✅ %s%s (%.3fs)", name, message and (" • " .. message) or "", duration), Color3.fromRGB(100, 255, 100))
+            else
+                fails = fails + 1
+                appendLog(string.format("⛔ %s failed: %s (%.3fs)", name, message, duration), Color3.fromRGB(255, 100, 100))
+            end
+        end
+
+        local undefinedAliases = {}
+        for _, alias in ipairs(aliases) do
+            if getGlobal(alias) == nil then
+                table.insert(undefinedAliases, alias)
+            end
+        end
+        if #undefinedAliases > 0 then
+            undefined = undefined + 1
+            appendLog("⚠️ Manque alias: " .. table.concat(undefinedAliases, ", "), Color3.fromRGB(255, 200, 100))
+        end
+        running = running - 1
+    end)
+end
+
+----------------------------
+-- Initialisation des logs
+----------------------------
+appendLog("UNC Environment Check", Color3.fromRGB(150, 150, 255))
+appendLog("✅ - Pass, ⛔ - Fail, ⏺️ - No test, ⚠️ - Missing aliases", Color3.fromRGB(200, 200, 200))
+appendLog("")
+
+----------------------------
+-- Définition de tous les tests (80+ tests)
+-- (Les tests conservent leur logique d'origine, avec notamment la mesure du temps et la mise à jour colorisée du log)
+----------------------------
+
+-- Cache Functions
+test("cache.invalidate", {}, function()
+    local container = Instance.new("Folder")
+    local part = Instance.new("Part", container)
+    cache.invalidate(container:FindFirstChild("Part"))
+    assert(part ~= container:FindFirstChild("Part"), "La référence n'a pas été invalidée")
+end)
+
+test("cache.iscached", {}, function()
+    local part = Instance.new("Part")
+    assert(cache.iscached(part), "Le part devrait être en cache")
+    cache.invalidate(part)
+    assert(not cache.iscached(part), "Le part ne devrait pas être en cache")
+end)
+
+test("cache.replace", {}, function()
+    local part = Instance.new("Part")
+    local fire = Instance.new("Fire")
+    cache.replace(part, fire)
+    assert(part ~= fire, "Le part n'a pas été remplacé par Fire")
+end)
+
+-- Instance and Reference Functions
+test("cloneref", {}, function()
+    local part = Instance.new("Part")
+    local clone = cloneref(part)
+    assert(part ~= clone, "Le clone ne doit pas être égal à l'original")
+    clone.Name = "Test"
+    assert(part.Name == "Test", "Le clone devrait mettre à jour l'original")
+end)
+
+test("compareinstances", {}, function()
+    local part = Instance.new("Part")
+    local clone = cloneref(part)
+    assert(part ~= clone, "Le clone ne doit pas être égal à l'original")
+    assert(compareinstances(part, clone), "Le clone devrait être égal à l'original avec compareinstances()")
+end)
+
+-- Closures & Debug Functions
+local function shallowEqual(t1, t2)
+    if t1 == t2 then return true end
+    local UNIQUE_TYPES = {["function"] = true, ["table"] = true, ["userdata"] = true, ["thread"] = true}
+    for k, v in pairs(t1) do
+        if UNIQUE_TYPES[type(v)] then
+            if type(t2[k]) ~= type(v) then return false end
+        elseif t2[k] ~= v then return false end
+    end
+    for k, v in pairs(t2) do
+        if UNIQUE_TYPES[type(v)] then
+            if type(t1[k]) ~= type(v) then return false end
+        elseif t1[k] ~= v then return false end
+    end
+    return true
+end
+
+test("checkcaller", {}, function()
+    assert(checkcaller(), "Le scope principal doit retourner true")
+end)
+
+test("clonefunction", {}, function()
+    local function testFunc()
+        return "success"
+    end
+    local copy = clonefunction(testFunc)
+    assert(testFunc() == copy(), "Le clone doit retourner la même valeur que l'original")
+    assert(testFunc ~= copy, "Le clone ne doit pas être égal à l'original")
+end)
+
+test("getcallingscript", {})
+
+test("getscriptclosure", {"getscriptfunction"}, function()
+    local module = game:GetService("CoreGui").RobloxGui.Modules.Common.Constants
+    local constants = getrenv().require(module)
+    local generated = getscriptclosure(module)()
+    assert(constants ~= generated, "Le module généré ne doit pas correspondre à l'original")
+    assert(shallowEqual(constants, generated), "Les constantes générées doivent être égales de manière superficielle")
+end)
+
+test("hookfunction", {"replaceclosure"}, function()
+    local function testFunc()
+        return true
+    end
+    local ref = hookfunction(testFunc, function() return false end)
+    assert(testFunc() == false, "La fonction doit retourner false")
+    assert(ref() == true, "La fonction originale doit retourner true")
+    assert(testFunc ~= ref, "La fonction originale ne doit pas être identique à la référence")
+end)
+
+test("iscclosure", {}, function()
+    assert(iscclosure(print) == true, "La fonction 'print' devrait être une C closure")
+    assert(iscclosure(function() end) == false, "La fonction d'exécution ne devrait pas être une C closure")
+end)
+
+test("islclosure", {}, function()
+    assert(islclosure(print) == false, "La fonction 'print' ne devrait pas être une Lua closure")
+    assert(islclosure(function() end) == true, "La fonction d'exécution devrait être une Lua closure")
+end)
+
+test("isexecutorclosure", {"checkclosure", "isourclosure"}, function()
+    assert(isexecutorclosure(isexecutorclosure) == true, "L'exécuteur global n'a pas retourné true")
+    assert(isexecutorclosure(newcclosure(function() end)) == true, "L'exécuteur C closure n'a pas retourné true")
+    assert(isexecutorclosure(function() end) == true, "L'exécuteur Luau closure n'a pas retourné true")
+    assert(isexecutorclosure(print) == false, "La fonction Roblox globale ne doit pas être considérée comme une closure de l'exécuteur")
+end)
+
+test("loadstring", {}, function()
+    local animate = game:GetService("Players").LocalPlayer.Character.Animate
+    local bytecode = getscriptbytecode(animate)
+    local func = loadstring(bytecode)
+    assert(type(func) ~= "function", "Le bytecode Luau ne doit pas être chargeable !")
+    assert(assert(loadstring("return ... + 1"))(1) == 2, "L'opération mathématique simple a échoué")
+    assert(type(select(2, loadstring("f"))) == "string", "loadstring n'a pas retourné d'erreur pour une erreur de compilation")
+end)
+
+test("newcclosure", {}, function()
+    local function testFunc()
+        return true
+    end
+    local testC = newcclosure(testFunc)
+    assert(testFunc() == testC(), "La nouvelle C closure doit retourner la même valeur que l'original")
+    assert(testFunc ~= testC, "La nouvelle C closure ne doit pas être identique à l'original")
+    assert(iscclosure(testC), "La nouvelle C closure doit être une C closure")
+end)
+
+-- Console Functions
+test("rconsoleclear", {"consoleclear"})
+test("rconsolecreate", {"consolecreate"})
+test("rconsoledestroy", {"consoledestroy"})
+test("rconsoleinput", {"consoleinput"})
+test("rconsoleprint", {"consoleprint"})
+test("rconsolesettitle", {"rconsolename", "consolesettitle"})
+
+-- Crypt Functions
+test("crypt.base64encode", {"crypt.base64.encode", "crypt.base64_encode", "base64.encode", "base64_encode"}, function()
+    assert(crypt.base64encode("test") == "dGVzdA==", "L'encodage Base64 a échoué")
+end)
+
+test("crypt.base64decode", {"crypt.base64.decode", "crypt.base64_decode", "base64.decode", "base64_decode"}, function()
+    assert(crypt.base64decode("dGVzdA==") == "test", "Le décodage Base64 a échoué")
+end)
+
+test("crypt.encrypt", {}, function()
+    local key = crypt.generatekey()
+    local encrypted, iv = crypt.encrypt("test", key, nil, "CBC")
+    assert(iv, "crypt.encrypt doit retourner un IV")
+    local decrypted = crypt.decrypt(encrypted, key, iv, "CBC")
+    assert(decrypted == "test", "Le décryptage n'a pas retourné la chaîne originale")
+end)
+
+test("crypt.decrypt", {}, function()
+    local key, iv = crypt.generatekey(), crypt.generatekey()
+    local encrypted = crypt.encrypt("test", key, iv, "CBC")
+    local decrypted = crypt.decrypt(encrypted, key, iv, "CBC")
+    assert(decrypted == "test", "Le décryptage n'a pas retourné la chaîne originale")
+end)
+
+test("crypt.generatebytes", {}, function()
+    local size = math.random(10, 100)
+    local bytes = crypt.generatebytes(size)
+    local decoded = crypt.base64decode(bytes)
+    assert(#decoded == size, string.format("La taille décodée devrait être %d, obtenue %d", size, #decoded))
+end)
+
+test("crypt.generatekey", {}, function()
+    local key = crypt.generatekey()
+    local decoded = crypt.base64decode(key)
+    assert(#decoded == 32, "La clé générée devrait être de 32 octets décodés")
+end)
+
+test("crypt.hash", {}, function()
+    local algorithms = {'sha1', 'sha384', 'sha512', 'md5', 'sha256', 'sha3-224', 'sha3-256', 'sha3-512'}
+    for _, algorithm in ipairs(algorithms) do
+        local hash = crypt.hash("test", algorithm)
+        assert(hash, "crypt.hash pour l'algorithme '" .. algorithm .. "' n'a pas retourné de hash")
+    end
+end)
+
+-- Debug Functions
+test("debug.getconstant", {}, function()
+    local function testFunc()
+        print("Hello, world!")
+    end
+    assert(debug.getconstant(testFunc, 1) == "print", "La première constante doit être 'print'")
+    assert(debug.getconstant(testFunc, 2) == nil, "La deuxième constante doit être nil")
+    assert(debug.getconstant(testFunc, 3) == "Hello, world!", "La troisième constante doit être 'Hello, world!'")
+end)
+
+test("debug.getconstants", {}, function()
+    local function testFunc()
+        local num = 5000 .. 50000
+        print("Hello, world!", num, warn)
+    end
+    local constants = debug.getconstants(testFunc)
+    assert(constants[1] == 50000, "La première constante doit être 50000")
+    assert(constants[2] == "print", "La deuxième constante doit être 'print'")
+    assert(constants[3] == nil, "La troisième constante doit être nil")
+    assert(constants[4] == "Hello, world!", "La quatrième constante doit être 'Hello, world!'")
+    assert(constants[5] == "warn", "La cinquième constante doit être 'warn'")
+end)
+
+test("debug.getinfo", {}, function()
+    local types = {
+        source = "string",
+        short_src = "string",
+        func = "function",
+        what = "string",
+        currentline = "number",
+        name = "string",
+        nups = "number",
+        numparams = "number",
+        is_vararg = "number",
+    }
+    local function testFunc(...)
+        print(...)
+    end
+    local info = debug.getinfo(testFunc)
+    for k, v in pairs(types) do
+        assert(info[k] ~= nil, "Le champ '" .. k .. "' est manquant dans debug.getinfo")
+        assert(type(info[k]) == v, string.format("Le champ '%s' doit être de type %s (obtenu %s)", k, v, type(info[k])))
+    end
+end)
+
+test("debug.getproto", {}, function()
+    local function testFunc()
+        local function proto()
+            return true
+        end
+    end
+    local proto = debug.getproto(testFunc, 1, true)[1]
+    local realproto = debug.getproto(testFunc, 1)
+    assert(proto, "Impossible d'obtenir la fonction interne")
+    assert(proto() == true, "La fonction interne n'a pas retourné true")
+    if not realproto() then
+        return "Les valeurs de retour des proto sont désactivées sur cet exécuteur"
+    end
+end)
+
+test("debug.getprotos", {}, function()
+    local function testFunc()
+        local function _1() return true end
+        local function _2() return true end
+        local function _3() return true end
+    end
+    for i in ipairs(debug.getprotos(testFunc)) do
+        local proto = debug.getproto(testFunc, i, true)[1]
+        local realproto = debug.getproto(testFunc, i)
+        assert(proto(), "Impossible d'obtenir la fonction interne " .. i)
+        if not realproto() then
+            return "Les valeurs de retour des proto sont désactivées sur cet exécuteur"
+        end
+    end
+end)
+
+test("debug.getstack", {}, function()
+    local _ = "a" .. "b"
+    local stackVal = debug.getstack(1, 1)
+    if type(stackVal) == "table" then
+        assert(stackVal[1] == "ab", "La première valeur dans la pile devrait être 'ab'")
+    else
+        assert(stackVal == "ab", "La première valeur dans la pile devrait être 'ab'")
+    end
+end)
+
+test("debug.getupvalue", {}, function()
+    local upvalue = function() end
+    local function testFunc()
+        print(upvalue)
+    end
+    assert(debug.getupvalue(testFunc, 1) == upvalue, "La valeur retournée par debug.getupvalue est incorrecte")
+end)
+
+test("debug.getupvalues", {}, function()
+    local upvalue = function() end
+    local function testFunc()
+        print(upvalue)
+    end
+    local upvalues = debug.getupvalues(testFunc)
+    assert(upvalues[1] == upvalue, "La valeur retournée par debug.getupvalues est incorrecte")
+end)
+
+test("debug.setconstant", {}, function()
+    local function testFunc()
+        return "fail"
+    end
+    debug.setconstant(testFunc, 1, "success")
+    assert(testFunc() == "success", "debug.setconstant n'a pas modifié la constante")
+end)
+
+test("debug.setstack", {}, function()
+    local function testFunc()
+        return "fail", debug.setstack(1, 1, "success")
+    end
+    assert(testFunc() == "success", "debug.setstack n'a pas modifié la pile")
+end)
+
+test("debug.setupvalue", {}, function()
+    local function upvalue() return "fail" end
+    local function testFunc() return upvalue() end
+    debug.setupvalue(testFunc, 1, function() return "success" end)
+    assert(testFunc() == "success", "debug.setupvalue n'a pas modifié l'upvalue")
+end)
+
+-- Filesystem Functions
+if isfolder and makefolder and delfolder then
+    if isfolder(".tests") then delfolder(".tests") end
+    makefolder(".tests")
+end
+
+test("readfile", {}, function()
+    writefile(".tests/readfile.txt", "success")
+    assert(readfile(".tests/readfile.txt") == "success", "Le contenu du fichier n'est pas correct")
+end)
+
+test("listfiles", {}, function()
+    makefolder(".tests/listfiles")
+    writefile(".tests/listfiles/test_1.txt", "success")
+    writefile(".tests/listfiles/test_2.txt", "success")
+    local files = listfiles(".tests/listfiles")
+    assert(#files == 2, "Nombre de fichiers incorrect")
+    assert(isfile(files[1]), "Le chemin retourné n'est pas un fichier")
+    assert(readfile(files[1]) == "success", "Contenu du fichier incorrect")
+    makefolder(".tests/listfiles_2")
+    makefolder(".tests/listfiles_2/test_1")
+    makefolder(".tests/listfiles_2/test_2")
+    local folders = listfiles(".tests/listfiles_2")
+    assert(#folders == 2, "Nombre de dossiers incorrect")
+    assert(isfolder(folders[1]), "Le chemin retourné n'est pas un dossier")
+end)
+
+test("writefile", {}, function()
+    writefile(".tests/writefile.txt", "success")
+    assert(readfile(".tests/writefile.txt") == "success", "Le fichier n'a pas été correctement écrit")
+    local requiresFileExt = pcall(function()
+        writefile(".tests/writefile", "success")
+        assert(isfile(".tests/writefile.txt"))
+    end)
+    if not requiresFileExt then
+        return "Cet exécuteur requiert une extension pour writefile"
+    end
+end)
+
+test("makefolder", {}, function()
+    makefolder(".tests/makefolder")
+    assert(isfolder(".tests/makefolder"), "Le dossier n'a pas été créé")
+end)
+
+test("appendfile", {}, function()
+    writefile(".tests/appendfile.txt", "su")
+    appendfile(".tests/appendfile.txt", "cce")
+    appendfile(".tests/appendfile.txt", "ss")
+    assert(readfile(".tests/appendfile.txt") == "success", "L'appendfile n'a pas fonctionné")
+end)
+
+test("isfile", {}, function()
+    writefile(".tests/isfile.txt", "success")
+    assert(isfile(".tests/isfile.txt") == true, "isfile ne retourne pas true pour un fichier")
+    assert(isfile(".tests") == false, "isfile ne retourne pas false pour un dossier")
+    assert(isfile(".tests/doesnotexist.exe") == false, "isfile ne retourne pas false pour un chemin inexistant (obtenu " .. tostring(isfile(".tests/doesnotexist.exe")) .. ")")
+end)
+
+test("isfolder", {}, function()
+    assert(isfolder(".tests") == true, "isfolder retourne faux pour un dossier")
+    assert(isfolder(".tests/doesnotexist.exe") == false, "isfolder retourne faux pour un chemin inexistant (obtenu " .. tostring(isfolder(".tests/doesnotexist.exe")) .. ")")
+end)
+
+test("delfolder", {}, function()
+    makefolder(".tests/delfolder")
+    delfolder(".tests/delfolder")
+    assert(isfolder(".tests/delfolder") == false, "delfolder n'a pas supprimé le dossier")
+end)
+
+test("delfile", {}, function()
+    writefile(".tests/delfile.txt", "Hello, world!")
+    delfile(".tests/delfile.txt")
+    assert(isfile(".tests/delfile.txt") == false, "delfile n'a pas supprimé le fichier")
+end)
+
+test("loadfile", {}, function()
+    writefile(".tests/loadfile.txt", "return ... + 1")
+    assert(assert(loadfile(".tests/loadfile.txt"))(1) == 2, "loadfile n'a pas chargé correctement le fichier avec arguments")
+    writefile(".tests/loadfile.txt", "f")
+    local callback, err = loadfile(".tests/loadfile.txt")
+    assert(err and not callback, "loadfile n'a pas retourné d'erreur pour une erreur de compilation")
+end)
+
+test("dofile", {})
+
+-- Input Functions
+test("isrbxactive", {"isgameactive"}, function()
+    assert(type(isrbxactive()) == "boolean", "isrbxactive ne retourne pas un booléen")
+end)
+test("mouse1click", {})
+test("mouse1press", {})
+test("mouse1release", {})
+test("mouse2click", {})
+test("mouse2press", {})
+test("mouse2release", {})
+test("mousemoveabs", {})
+test("mousemoverel", {})
+test("mousescroll", {})
+
+-- Instance Interaction Functions
+test("fireclickdetector", {}, function()
+    local detector = Instance.new("ClickDetector")
+    fireclickdetector(detector, 50, "MouseHoverEnter")
+end)
+
+test("getcallbackvalue", {}, function()
+    local bindable = Instance.new("BindableFunction")
+    local function testFunc() end
+    bindable.OnInvoke = testFunc
+    assert(getcallbackvalue(bindable, "OnInvoke") == testFunc, "La valeur retournée par getcallbackvalue est incorrecte")
+end)
+
+test("getconnections", {}, function()
+    local types = {
+        Enabled = "boolean",
+        ForeignState = "boolean",
+        LuaConnection = "boolean",
+        Function = "function",
+        Thread = "thread",
+        Fire = "function",
+        Defer = "function",
+        Disconnect = "function",
+        Disable = "function",
+        Enable = "function",
+    }
+    local bindable = Instance.new("BindableEvent")
+    bindable.Event:Connect(function() end)
+    local connection = getconnections(bindable.Event)[1]
+    for k, v in pairs(types) do
+        assert(connection[k] ~= nil, "getconnections manque le champ '" .. k .. "'")
+        assert(type(connection[k]) == v, string.format("Le champ '%s' doit être de type %s (obtenu %s)", k, v, type(connection[k])))
+    end
+end)
+
+test("getcustomasset", {}, function()
+    writefile(".tests/getcustomasset.txt", "success")
+    local contentId = getcustomasset(".tests/getcustomasset.txt")
+    assert(type(contentId) == "string", "getcustomasset ne retourne pas une chaîne")
+    assert(#contentId > 0, "getcustomasset retourne une chaîne vide")
+    assert(string.match(contentId, "rbxasset://") == "rbxasset://", "getcustomasset ne retourne pas une URL rbxasset")
+end)
+
+test("gethiddenproperty", {}, function()
+    local fire = Instance.new("Fire")
+    local property, isHidden = gethiddenproperty(fire, "size_xml")
+    assert(property == 5, "gethiddenproperty n'a pas retourné la bonne valeur")
+    assert(isHidden == true, "gethiddenproperty n'a pas indiqué que la propriété était cachée")
+end)
+
+test("sethiddenproperty", {}, function()
+    local fire = Instance.new("Fire")
+    local hidden = sethiddenproperty(fire, "size_xml", 10)
+    assert(hidden, "sethiddenproperty n'a pas retourné true")
+    assert(gethiddenproperty(fire, "size_xml") == 10, "sethiddenproperty n'a pas modifié la propriété cachée")
+end)
+
+test("gethui", {}, function()
+    assert(typeof(gethui()) == "Instance", "gethui ne retourne pas une Instance")
+end)
+
+test("getinstances", {}, function()
+    local instances = getinstances()
+    assert(instances[1]:IsA("Instance"), "Le premier élément retourné par getinstances n'est pas une Instance")
+end)
+
+test("getnilinstances", {}, function()
+    local nilInstances = getnilinstances()
+    assert(nilInstances[1]:IsA("Instance"), "Le premier élément retourné par getnilinstances n'est pas une Instance")
+    assert(nilInstances[1].Parent == nil, "Le premier élément retourné par getnilinstances n'est pas parenté à nil")
+end)
+
+test("isscriptable", {}, function()
+    local fire = Instance.new("Fire")
+    assert(isscriptable(fire, "size_xml") == false, "isscriptable ne retourne pas false pour une propriété non scriptable (size_xml)")
+    assert(isscriptable(fire, "Size") == true, "isscriptable ne retourne pas true pour une propriété scriptable (Size)")
+end)
+
+test("setscriptable", {}, function()
+    local fire = Instance.new("Fire")
+    local wasScriptable = setscriptable(fire, "size_xml", true)
+    assert(wasScriptable == false, "setscriptable ne retourne pas false pour une propriété non scriptable (size_xml)")
+    assert(isscriptable(fire, "size_xml") == true, "setscriptable n'a pas défini la propriété scriptable")
+    fire = Instance.new("Fire")
+    assert(isscriptable(fire, "size_xml") == false, "⚠️⚠️ setscriptable persiste entre les instances uniques ⚠️⚠️")
+end)
+
+test("setrbxclipboard", {})
+
+-- Metatable Functions
+test("getrawmetatable", {}, function()
+    local metatable = { __metatable = "Locked!" }
+    local object = setmetatable({}, metatable)
+    assert(getrawmetatable(object) == metatable, "getrawmetatable n'a pas retourné la bonne metatable")
+end)
+
+test("hookmetamethod", {}, function()
+    local object = setmetatable({}, { __index = newcclosure(function() return false end), __metatable = "Locked!" })
+    local ref = hookmetamethod(object, "__index", function() return true end)
+    assert(object.test == true, "hookmetamethod n'a pas modifié la valeur de retour")
+    assert(ref() == false, "La fonction d'origine retournée par hookmetamethod est incorrecte")
+end)
+
+test("getnamecallmethod", {}, function()
+    local method
+    local ref
+    ref = hookmetamethod(game, "__namecall", function(...)
+        if not method then
+            method = getnamecallmethod()
+        end
+        return ref(...)
+    end)
+    game:GetService("Lighting")
+    assert(method == "GetService", "getnamecallmethod n'a pas retourné 'GetService'")
+end)
+
+test("isreadonly", {}, function()
+    local object = {}
+    table.freeze(object)
+    assert(isreadonly(object), "isreadonly ne retourne pas true pour un tableau gelé")
+end)
+
+test("setrawmetatable", {}, function()
+    local object = setmetatable({}, { __index = function() return false end, __metatable = "Locked!" })
+    local objectReturned = setrawmetatable(object, { __index = function() return true end })
+    assert(object, "setrawmetatable n'a pas retourné l'objet original")
+    assert(object.test == true, "setrawmetatable n'a pas modifié la metatable")
+    if objectReturned then
+        return objectReturned == object and "L'objet original a été retourné" or "L'objet retourné n'est pas le même"
+    end
+end)
+
+test("setreadonly", {}, function()
+    local object = { success = false }
+    table.freeze(object)
+    setreadonly(object, false)
+    object.success = true
+    assert(object.success, "setreadonly n'a pas permis la modification du tableau")
+end)
+
+-- Miscellaneous Functions
+test("identifyexecutor", {"getexecutorname"}, function()
+    local name, version = identifyexecutor()
+    assert(type(name) == "string", "identifyexecutor ne retourne pas une chaîne pour le nom")
+    return type(version) == "string" and "Version retournée" or "Pas de version retournée"
+end)
+
+test("lz4compress", {}, function()
+    local raw = "Hello, world!"
+    local compressed = lz4compress(raw)
+    assert(type(compressed) == "string", "lz4compress ne retourne pas une chaîne")
+    assert(lz4decompress(compressed, #raw) == raw, "lz4decompress ne retourne pas la chaîne originale")
+end)
+
+test("lz4decompress", {}, function()
+    local raw = "Hello, world!"
+    local compressed = lz4compress(raw)
+    assert(type(compressed) == "string", "lz4compress ne retourne pas une chaîne")
+    assert(lz4decompress(compressed, #raw) == raw, "lz4decompress ne retourne pas la chaîne originale")
+end)
+
+test("messagebox", {})
+test("queue_on_teleport", {"queueonteleport"})
+
+test("request", {"http.request", "http_request"}, function()
+    local response = request({
+        Url = "https://httpbin.org/user-agent",
+        Method = "GET",
+    })
+    assert(type(response) == "table", "La réponse doit être un tableau")
+    assert(response.StatusCode == 200, "Le code d'état n'est pas 200")
+    local data = game:GetService("HttpService"):JSONDecode(response.Body)
+    assert(type(data) == "table" and type(data["user-agent"]) == "string", "La réponse ne contient pas de user-agent")
+    return "User-Agent: " .. data["user-agent"]
+end)
+
+test("setclipboard", {"toclipboard"})
+
+test("setfpscap", {}, function()
+    local renderStepped = RunService.RenderStepped
+    local function step()
+        renderStepped:Wait()
+        local sum = 0
+        for _ = 1, 5 do
+            sum = sum + 1 / renderStepped:Wait()
+        end
+        return math.round(sum / 5)
+    end
+    setfpscap(60)
+    local step60 = step()
+    setfpscap(0)
+    local step0 = step()
+    return string.format("%dfps @60 • %dfps @0", step60, step0)
+end)
+
+-- Scripts Functions
+test("getgc", {}, function()
+    local gc = getgc()
+    assert(type(gc) == "table", "getgc ne retourne pas un tableau")
+    assert(#gc > 0, "getgc retourne un tableau vide")
+end)
+
+test("getgenv", {}, function()
+    getgenv().__TEST_GLOBAL = true
+    assert(__TEST_GLOBAL, "getgenv n'a pas défini la variable globale")
+    getgenv().__TEST_GLOBAL = nil
+end)
+
+test("getloadedmodules", {}, function()
+    local modules = getloadedmodules()
+    assert(type(modules) == "table", "getloadedmodules ne retourne pas un tableau")
+    assert(#modules > 0, "getloadedmodules retourne un tableau vide")
+    assert(typeof(modules[1]) == "Instance", "Le premier élément n'est pas une Instance")
+    assert(modules[1]:IsA("ModuleScript"), "Le premier élément n'est pas un ModuleScript")
+end)
+
+test("getrenv", {}, function()
+    assert(_G ~= getrenv()._G, "_G est identique dans l'exécuteur et le jeu")
+end)
+
+test("getrunningscripts", {}, function()
+    local scripts = getrunningscripts()
+    assert(type(scripts) == "table", "getrunningscripts ne retourne pas un tableau")
+    assert(#scripts > 0, "getrunningscripts retourne un tableau vide")
+    assert(typeof(scripts[1]) == "Instance", "Le premier élément n'est pas une Instance")
+    assert(scripts[1]:IsA("ModuleScript") or scripts[1]:IsA("LocalScript"), "Le premier élément n'est ni un ModuleScript ni un LocalScript")
+end)
+
+test("getscriptbytecode", {"dumpstring"}, function()
+    local animate = game:GetService("Players").LocalPlayer.Character.Animate
+    local bytecode = getscriptbytecode(animate)
+    assert(type(bytecode) == "string", "getscriptbytecode ne retourne pas une chaîne pour Animate (un " .. animate.ClassName .. ")")
+end)
+
+test("getscripthash", {}, function()
+    local animate = game:GetService("Players").LocalPlayer.Character.Animate:Clone()
+    local hash = getscripthash(animate)
+    local source = animate.Source
+    animate.Source = "print('Hello, world!')"
+    task.defer(function()
+        animate.Source = source
+    end)
+    local newHash = getscripthash(animate)
+    assert(hash ~= newHash, "getscripthash n'a pas retourné un hash différent pour un script modifié")
+    assert(newHash == getscripthash(animate), "getscripthash n'est pas cohérent pour un script identique")
+end)
+
+test("getscripts", {}, function()
+    local scripts = getscripts()
+    assert(type(scripts) == "table", "getscripts ne retourne pas un tableau")
+    assert(#scripts > 0, "getscripts retourne un tableau vide")
+    assert(typeof(scripts[1]) == "Instance", "Le premier élément n'est pas une Instance")
+    assert(scripts[1]:IsA("ModuleScript") or scripts[1]:IsA("LocalScript"), "Le premier élément n'est ni un ModuleScript ni un LocalScript")
+end)
+
+test("getsenv", {}, function()
+    local animate = game:GetService("Players").LocalPlayer.Character.Animate
+    local env = getsenv(animate)
+    assert(type(env) == "table", "getsenv ne retourne pas un tableau pour Animate (un " .. animate.ClassName .. ")")
+    assert(env.script == animate, "La variable globale 'script' n'est pas identique à Animate")
+end)
+
+test("getthreadidentity", {"getidentity", "getthreadcontext"}, function()
+    assert(type(getthreadidentity()) == "number", "getthreadidentity ne retourne pas un nombre")
+end)
+
+test("setthreadidentity", {"setidentity", "setthreadcontext"}, function()
+    setthreadidentity(3)
+    assert(getthreadidentity() == 3, "setthreadidentity n'a pas modifié l'identité du thread")
+end)
+
+-- Drawing Functions
+test("Drawing", {})
+test("Drawing.new", {}, function()
+    local drawing = Drawing.new("Square")
+    drawing.Visible = false
+    local canDestroy = pcall(function() drawing:Destroy() end)
+    assert(canDestroy, "Drawing:Destroy() doit réussir sans erreur")
+end)
+
+test("Drawing.Fonts", {}, function()
+    assert(Drawing.Fonts.UI == 0, "Drawing.Fonts.UI incorrect")
+    assert(Drawing.Fonts.System == 1, "Drawing.Fonts.System incorrect")
+    assert(Drawing.Fonts.Plex == 2, "Drawing.Fonts.Plex incorrect")
+    assert(Drawing.Fonts.Monospace == 3, "Drawing.Fonts.Monospace incorrect")
+end)
+
+test("isrenderobj", {}, function()
+    local drawing = Drawing.new("Image")
+    drawing.Visible = true
+    assert(isrenderobj(drawing) == true, "isrenderobj doit retourner true pour une Image")
+    assert(isrenderobj(newproxy()) == false, "isrenderobj doit retourner false pour un objet invalide")
+end)
+
+test("getrenderproperty", {}, function()
+    local drawing = Drawing.new("Image")
+    drawing.Visible = true
+    assert(type(getrenderproperty(drawing, "Visible")) == "boolean", "getrenderproperty doit retourner un booléen pour 'Visible'")
+    local success, result = pcall(function() return getrenderproperty(drawing, "Color") end)
+    if not success or not result then
+        return "La propriété 'Color' n'est pas supportée pour Image"
+    end
+end)
+
+test("setrenderproperty", {}, function()
+    local drawing = Drawing.new("Square")
+    drawing.Visible = true
+    setrenderproperty(drawing, "Visible", false)
+    assert(drawing.Visible == false, "setrenderproperty n'a pas modifié la propriété 'Visible'")
+end)
+
+test("cleardrawcache", {}, function()
+    cleardrawcache()
+end)
+
+-- WebSocket Functions
+test("WebSocket", {})
+test("WebSocket.connect", {}, function()
+    local types = {
+        Send = "function",
+        Close = "function",
+        OnMessage = {"table", "userdata"},
+        OnClose = {"table", "userdata"},
+    }
+    local ws = WebSocket.connect("ws://echo.websocket.events")
+    assert(type(ws) == "table" or type(ws) == "userdata", "WebSocket.connect ne retourne pas un tableau ou userdata")
+    for k, v in pairs(types) do
+        if type(v) == "table" then
+            assert(table.find(v, type(ws[k])), "La propriété '" .. k .. "' doit être de type " .. table.concat(v, ", ") .. " (obtenu " .. type(ws[k]) .. ")")
+        else
+            assert(type(ws[k]) == v, "La propriété '" .. k .. "' doit être de type " .. v .. " (obtenu " .. type(ws[k]) .. ")")
+        end
+    end
+    ws:Close()
+end)
+
+----------------------------
+-- Résumé final et affichage
+----------------------------
+task.defer(function()
+    repeat task.wait() until running == 0
+    local total = passes + fails
+    local rate = total > 0 and math.round(passes / total * 100) or 0
+    local summary = {
+        "",
+        "----- UNC Summary -----",
+        string.format("✅ Succès: %d/%d (%d%%)", passes, total, rate),
+        string.format("⛔ Échecs: %d", fails),
+        string.format("⚠️ Alias manquants: %d", undefined)
+    }
+    for _, line in ipairs(summary) do
+        appendLog(line, Color3.fromRGB(200, 200, 255))
+    end
+    summaryLabel.Text = string.format("Summary: %d%% (%d/%d), Fail: %d, Missing: %d", rate, passes, total, fails, undefined)
+end)
