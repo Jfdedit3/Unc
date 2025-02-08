@@ -1,4 +1,4 @@
---[[
+--[[ 
     Script amélioré pour l'environnement UNC Test
     Améliorations incluses :
       - Vérification de la présence du GUI avant création
@@ -6,25 +6,20 @@
       - Mesure du temps d'exécution de chaque test
       - Commentaires détaillés et code plus lisible/modulaire
 ]]
-
 ----------------------------
 -- Services et variables globales
 ----------------------------
-local CoreGui = game:GetService("CoreGui")
+local CoreGui = game:GetService("CoreGui") or game:GetService("StarterGui")
 local TextService = game:GetService("TextService")
 local RunService = game:GetService("RunService")
 
--- Vérifier si le GUI UNC_Test_GUI existe déjà pour éviter les doublons
 if CoreGui:FindFirstChild("UNC_Test_GUI") then
     warn("Le GUI UNC_Test_GUI existe déjà. Arrêt du script.")
     return
 end
 
--- Compteurs pour les tests
 local passes, fails, undefined = 0, 0, 0
 local running = 0
-
--- Stockage des logs dans un tableau pour mise à jour simplifiée
 local logEntries = {}
 
 ----------------------------
@@ -61,6 +56,7 @@ titleLabel.TextScaled = true
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.Parent = mainFrame
 
+-- Bouton de fermeture du GUI
 local closeButton = Instance.new("TextButton")
 closeButton.Size = UDim2.new(0, 25, 0, 25)
 closeButton.Position = UDim2.new(1, -30, 0, 5)
@@ -70,6 +66,7 @@ closeButton.TextColor3 = Color3.new(1, 1, 1)
 closeButton.Font = Enum.Font.SourceSansBold
 closeButton.TextScaled = true
 closeButton.Parent = mainFrame
+
 closeButton.MouseButton1Click:Connect(function()
     screenGui:Destroy()
 end)
@@ -115,7 +112,6 @@ local function appendLog(text, color)
     end
     table.insert(logEntries, text)
     logText.Text = table.concat(logEntries, "\n")
-    -- Mise à jour dynamique de la taille du canvas pour permettre le scrolling
     local textSize = TextService:GetTextSize(logText.Text, logText.TextSize, logText.Font, Vector2.new(logFrame.AbsoluteSize.X, math.huge))
     logFrame.CanvasSize = UDim2.new(0, 0, 0, textSize.Y + 10)
 end
@@ -144,12 +140,11 @@ local function getGlobal(path)
 end
 
 ----------------------------
--- Fonction de test : exécute le callback en mesurant le temps, met à jour les compteurs et affiche le résultat
+-- Fonction de test : exécute le callback, mesure le temps et met à jour les compteurs
 ----------------------------
 local function test(name, aliases, callback)
     running = running + 1
     task.spawn(function()
-        local startTime = os.clock()
         if not callback then
             appendLog("⏺️ " .. name)
         elseif not getGlobal(name) then
@@ -189,7 +184,6 @@ appendLog("")
 
 ----------------------------
 -- Définition de tous les tests (80+ tests)
--- (Les tests conservent leur logique d'origine, avec notamment la mesure du temps et la mise à jour colorisée du log)
 ----------------------------
 
 -- Cache Functions
@@ -770,7 +764,6 @@ test("request", {"http.request", "http_request"}, function()
 end)
 
 test("setclipboard", {"toclipboard"})
-
 test("setfpscap", {}, function()
     local renderStepped = RunService.RenderStepped
     local function step()
@@ -947,4 +940,89 @@ task.defer(function()
         appendLog(line, Color3.fromRGB(200, 200, 255))
     end
     summaryLabel.Text = string.format("Summary: %d%% (%d/%d), Fail: %d, Missing: %d", rate, passes, total, fails, undefined)
+end)
+
+-------------------------------------------------
+-- Fonctions UNC Avancées
+-------------------------------------------------
+-- Bouton pour activer le mode "Advanced"
+local advancedButton = Instance.new("TextButton")
+advancedButton.Name = "AdvancedButton"
+advancedButton.Size = UDim2.new(0, 150, 0, 40)
+advancedButton.Position = UDim2.new(1, -160, 0, 60)
+advancedButton.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
+advancedButton.Text = "Advanced Mode: OFF"
+advancedButton.TextScaled = true
+advancedButton.Font = Enum.Font.SourceSansBold
+advancedButton.Parent = mainFrame
+
+local advancedModeEnabled = false
+
+advancedButton.MouseButton1Click:Connect(function()
+    advancedModeEnabled = not advancedModeEnabled
+    advancedButton.Text = "Advanced Mode: " .. (advancedModeEnabled and "ON" or "OFF")
+    if advancedModeEnabled then
+        appendLog("Advanced UNC functionalities activées.", Color3.fromRGB(150,255,150))
+        
+        -------------------------------------------------
+        -- Indicateur de performance (FPS)
+        -------------------------------------------------
+        local fpsLabel = Instance.new("TextLabel")
+        fpsLabel.Name = "FPSLabel"
+        fpsLabel.Size = UDim2.new(0, 200, 0, 30)
+        fpsLabel.Position = UDim2.new(0, 10, 1, -70)
+        fpsLabel.BackgroundTransparency = 1
+        fpsLabel.TextColor3 = Color3.new(1, 1, 0)
+        fpsLabel.TextScaled = true
+        fpsLabel.Font = Enum.Font.SourceSansBold
+        fpsLabel.Text = "FPS: Calcul en cours..."
+        fpsLabel.Parent = screenGui
+
+        spawn(function()
+            while advancedModeEnabled and fpsLabel and fpsLabel.Parent do
+                local dt = RunService.Heartbeat:Wait()
+                local fps = math.floor(1 / dt)
+                fpsLabel.Text = "FPS: " .. fps
+                wait(1)
+            end
+            if fpsLabel then
+                fpsLabel:Destroy()
+            end
+        end)
+
+        -------------------------------------------------
+        -- Relance automatique des tests échoués
+        -------------------------------------------------
+        _G.UncAutoRerunFailedTests = true
+        spawn(function()
+            while advancedModeEnabled and _G.UncAutoRerunFailedTests do
+                wait(30)
+                if _G.rerunFailedTests and type(_G.rerunFailedTests) == "function" then
+                    appendLog("Relance automatique des tests échoués...", Color3.fromRGB(200,200,255))
+                    pcall(_G.rerunFailedTests)
+                end
+            end
+        end)
+    else
+        appendLog("Advanced UNC functionalities désactivées.", Color3.fromRGB(255,150,150))
+        _G.UncAutoRerunFailedTests = false
+    end
+end)
+
+-------------------------------------------------
+-- Commande chat pour exécuter un test spécifique
+-------------------------------------------------
+game:GetService("Players").LocalPlayer.Chatted:Connect(function(message)
+    if advancedModeEnabled then
+        local args = string.split(message, " ")
+        if args[1]:lower() == "!runtest" and args[2] then
+            local testName = args[2]
+            if _G.runSingleTest and type(_G.runSingleTest) == "function" then
+                appendLog("Exécution du test '" .. testName .. "' sur demande...", Color3.fromRGB(150,255,150))
+                pcall(function() _G.runSingleTest(testName) end)
+            else
+                appendLog("La fonction runSingleTest n'est pas disponible.", Color3.fromRGB(255,100,100))
+            end
+        end
+    end
 end)
