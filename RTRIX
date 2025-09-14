@@ -1,0 +1,275 @@
+-- RTRIXLib.lua
+local RTRIX = {}
+
+-- Services
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Configuration
+RTRIX.config = {
+    AimbotEnabled = false,
+    AimAssist = false,
+    WallCheck = false,
+    TeamCheck = false,
+    ShowFOV = false,
+    FOV = 100,
+    TargetPart = "Head",
+    AimAssistSmoothness = 50,
+
+    ESPEnabled = false,
+    ESPTeamCheck = false,
+    Tracers = false,
+    TracersTeamCheck = false,
+    ESPColor = Color3.fromRGB(255, 0, 0),
+    FOVColor = Color3.fromRGB(0, 255, 0),
+
+    GoldenKnifeEnemy = false,
+    GoldenKnifeRandom = false,
+    GoldenKnifeBehind = false,
+
+    PlayerWalkSpeedEnabled = false,
+    PlayerWalkSpeed = 16,
+    PlayerJumpPower = 50,
+    PlayerInfJumpEnabled = false,
+
+    HitboxExpander = false,
+    HitboxSize = 0,
+    TeamCheckHitbox = false,
+    NoCollision = false,
+    BotDetection = false,
+}
+
+-- Fonctions principales
+function RTRIX.Window(title, size)
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "RTRIX_UI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.new(0, size.X, 0, size.Y)
+    mainFrame.Position = UDim2.new(0.5, -size.X/2, 0.5, -size.Y/2)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    mainFrame.Active = true
+    mainFrame.Draggable = true
+    mainFrame.Parent = screenGui
+
+    local titleBar = Instance.new("Frame")
+    titleBar.Size = UDim2.new(1, 0, 0, 25)
+    titleBar.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    titleBar.Parent = mainFrame
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(1, -50, 1, 0)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Text = title
+    titleLabel.TextColor3 = Color3.new(1, 1, 1)
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = 14
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = titleBar
+
+    local closeButton = Instance.new("TextButton")
+    closeButton.Size = UDim2.new(0, 25, 1, 0)
+    closeButton.Position = UDim2.new(1, -25, 0, 0)
+    closeButton.Text = "X"
+    closeButton.TextColor3 = Color3.new(1, 1, 1)
+    closeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.TextSize = 14
+    closeButton.Parent = titleBar
+
+    local contentFrame = Instance.new("Frame")
+    contentFrame.Size = UDim2.new(1, 0, 1, -25)
+    contentFrame.Position = UDim2.new(0, 0, 0, 25)
+    contentFrame.BackgroundTransparency = 1
+    contentFrame.Parent = mainFrame
+
+    local layout = Instance.new("UIListLayout")
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 5)
+    layout.Parent = contentFrame
+
+    closeButton.MouseButton1Click:Connect(function()
+        mainFrame:Destroy()
+    end)
+
+    return {
+        AddLabel = function(text)
+            local label = Instance.new("TextLabel")
+            label.Size = UDim2.new(1, -10, 0, 20)
+            label.Position = UDim2.new(0, 5, 0, 0)
+            label.BackgroundTransparency = 1
+            label.Text = text
+            label.TextColor3 = Color3.new(1, 1, 1)
+            label.Font = Enum.Font.Gotham
+            label.TextSize = 12
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.Parent = contentFrame
+            return label
+        end,
+
+        AddToggle = function(text, key)
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, -10, 0, 25)
+            btn.Position = UDim2.new(0, 5, 0, 0)
+            btn.Text = text .. (RTRIX.config[key] and " [ON]" or " [OFF]")
+            btn.TextColor3 = Color3.new(1, 1, 1)
+            btn.Font = Enum.Font.Gotham
+            btn.TextSize = 12
+            btn.BackgroundColor3 = RTRIX.config[key] and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+            btn.Parent = contentFrame
+
+            btn.MouseButton1Click:Connect(function()
+                RTRIX.config[key] = not RTRIX.config[key]
+                btn.Text = text .. (RTRIX.config[key] and " [ON]" or " [OFF]")
+                btn.BackgroundColor3 = RTRIX.config[key] and Color3.fromRGB(0, 170, 0) or Color3.fromRGB(170, 0, 0)
+            end)
+
+            return btn
+        end,
+
+        AddSlider = function(text, key, min, max)
+            local frame = Instance.new("Frame")
+            frame.Size = UDim2.new(1, -10, 0, 40)
+            frame.BackgroundTransparency = 1
+            frame.Parent = contentFrame
+
+            local label = Instance.new("TextLabel")
+            label.Size = UDim2.new(1, 0, 0, 15)
+            label.BackgroundTransparency = 1
+            label.Text = text .. ": " .. tostring(RTRIX.config[key])
+            label.TextColor3 = Color3.new(1, 1, 1)
+            label.Font = Enum.Font.Gotham
+            label.TextSize = 12
+            label.Parent = frame
+
+            local slider = Instance.new("TextBox")
+            slider.Size = UDim2.new(1, 0, 0, 20)
+            slider.Position = UDim2.new(0, 0, 0, 20)
+            slider.PlaceholderText = "Valeur (" .. min .. "-" .. max .. ")"
+            slider.Text = tostring(RTRIX.config[key])
+            slider.TextColor3 = Color3.new(1, 1, 1)
+            slider.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+            slider.Font = Enum.Font.Gotham
+            slider.TextSize = 12
+            slider.Parent = frame
+
+            slider.FocusLost:Connect(function()
+                local value = tonumber(slider.Text)
+                if value then
+                    RTRIX.config[key] = math.clamp(value, min, max)
+                    label.Text = text .. ": " .. tostring(RTRIX.config[key])
+                else
+                    slider.Text = tostring(RTRIX.config[key])
+                end
+            end)
+
+            return frame
+        end,
+
+        AddButton = function(text, callback)
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, -10, 0, 25)
+            btn.Position = UDim2.new(0, 5, 0, 0)
+            btn.Text = text
+            btn.TextColor3 = Color3.new(1, 1, 1)
+            btn.Font = Enum.Font.Gotham
+            btn.TextSize = 12
+            btn.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+            btn.Parent = contentFrame
+
+            btn.MouseButton1Click:Connect(callback)
+
+            return btn
+        end,
+
+        AddColorPicker = function(text, key)
+            local btn = Instance.new("TextButton")
+            btn.Size = UDim2.new(1, -10, 0, 25)
+            btn.Position = UDim2.new(0, 5, 0, 0)
+            btn.Text = text
+            btn.TextColor3 = Color3.new(1, 1, 1)
+            btn.Font = Enum.Font.Gotham
+            btn.TextSize = 12
+            btn.BackgroundColor3 = RTRIX.config[key]
+            btn.Parent = contentFrame
+
+            btn.MouseButton1Click:Connect(function()
+                RTRIX.config[key] = Color3.new(math.random(), math.random(), math.random())
+                btn.BackgroundColor3 = RTRIX.config[key]
+            end)
+
+            return btn
+        end
+    }
+end
+
+-- Fonctions utilitaires
+function RTRIX.getRandomEnemy()
+    local enemies = {}
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Team ~= LocalPlayer.Team and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(enemies, plr)
+        end
+    end
+    if #enemies > 0 then return enemies[math.random(1,#enemies)] end
+end
+
+function RTRIX.getRandomPlayer()
+    local pool = {}
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(pool, plr)
+        end
+    end
+    if #pool > 0 then return pool[math.random(1,#pool)] end
+end
+
+function RTRIX.teleportTo(pos)
+    local char = LocalPlayer.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        char.HumanoidRootPart.CFrame = CFrame.new(pos)
+    end
+end
+
+function RTRIX.teleportBehind(targetPlr)
+    if not targetPlr or not targetPlr.Character or not targetPlr.Character:FindFirstChild("HumanoidRootPart") then return end
+    local hrp = targetPlr.Character.HumanoidRootPart
+    local backOffset = hrp.CFrame.LookVector * -3
+    local behindPos = hrp.Position + backOffset + Vector3.new(0,1,0)
+    RTRIX.teleportTo(behindPos)
+end
+
+-- Boucle principale
+function RTRIX.startMainLoop()
+    task.spawn(function()
+        while true do
+            -- Golden Knife Logic
+            if RTRIX.config.GoldenKnifeEnemy then
+                local enemy = RTRIX.getRandomEnemy()
+                if enemy then
+                    RTRIX.teleportTo(enemy.Character.HumanoidRootPart.Position + Vector3.new(0,2,0))
+                end
+            end
+            if RTRIX.config.GoldenKnifeRandom then
+                local target = RTRIX.getRandomPlayer()
+                if target then
+                    RTRIX.teleportTo(target.Character.HumanoidRootPart.Position + Vector3.new(0,2,0))
+                end
+            end
+            if RTRIX.config.GoldenKnifeBehind then
+                local enemy = RTRIX.getRandomEnemy()
+                if enemy then
+                    RTRIX.teleportBehind(enemy)
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+return RTRIX
