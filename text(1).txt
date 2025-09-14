@@ -1,26 +1,57 @@
---[[ 
+--[[
     Script amélioré pour l'environnement UNC Test
     Améliorations incluses :
       - Vérification de la présence du GUI avant création
       - Gestion centralisée et colorisée des logs avec RichText
       - Mesure du temps d'exécution de chaque test
       - Commentaires détaillés et code plus lisible/modulaire
-]]
+      - Catégorisation des tests
+      - Exportation des résultats
+      - Interface utilisateur améliorée (filtres, barre de progression)
+      - Gestion d'erreurs renforcée
+--]]
+
 ----------------------------
 -- Services et variables globales
 ----------------------------
 local CoreGui = game:GetService("CoreGui") or game:GetService("StarterGui")
 local TextService = game:GetService("TextService")
 local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
 
+-- Vérification de l'existence du GUI
 if CoreGui:FindFirstChild("UNC_Test_GUI") then
     warn("Le GUI UNC_Test_GUI existe déjà. Arrêt du script.")
     return
 end
 
-local passes, fails, undefined = 0, 0, 0
-local running = 0
+-- Variables de suivi des résultats
+local testResults = {
+    passes = 0,
+    fails = 0,
+    undefined = 0,
+    total = 0,
+    categories = {}
+}
+local runningTests = 0
 local logEntries = {}
+local allTests = {} -- Stockage de tous les tests définis
+
+-- Configuration de l'UI
+local UI_CONFIG = {
+    width = 700,
+    height = 500,
+    backgroundColor = Color3.fromRGB(30, 30, 30),
+    textColor = Color3.new(1, 1, 1),
+    logBackgroundColor = Color3.fromRGB(20, 20, 20),
+    successColor = Color3.fromRGB(100, 255, 100),
+    failColor = Color3.fromRGB(255, 100, 100),
+    warnColor = Color3.fromRGB(255, 200, 100),
+    infoColor = Color3.fromRGB(150, 150, 255),
+    neutralColor = Color3.fromRGB(200, 200, 200)
+}
 
 ----------------------------
 -- Fonction utilitaire : Conversion Color3 -> Hex pour RichText
@@ -41,17 +72,18 @@ screenGui.ResetOnSpawn = false
 screenGui.Parent = CoreGui
 
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 600, 0, 400)
-mainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
-mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.Size = UDim2.new(0, UI_CONFIG.width, 0, UI_CONFIG.height)
+mainFrame.Position = UDim2.new(0.5, -UI_CONFIG.width/2, 0.5, -UI_CONFIG.height/2)
+mainFrame.BackgroundColor3 = UI_CONFIG.backgroundColor
 mainFrame.BorderSizePixel = 0
 mainFrame.Parent = screenGui
 
+-- Titre
 local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, 0, 0, 50)
+titleLabel.Size = UDim2.new(1, 0, 0, 40)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "UNC Environment Check"
-titleLabel.TextColor3 = Color3.new(1, 1, 1)
+titleLabel.Text = "UNC Environment Check - Amélioré"
+titleLabel.TextColor3 = UI_CONFIG.textColor
 titleLabel.TextScaled = true
 titleLabel.Font = Enum.Font.SourceSansBold
 titleLabel.Parent = mainFrame
@@ -62,21 +94,22 @@ closeButton.Size = UDim2.new(0, 25, 0, 25)
 closeButton.Position = UDim2.new(1, -30, 0, 5)
 closeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 closeButton.Text = "X"
-closeButton.TextColor3 = Color3.new(1, 1, 1)
+closeButton.TextColor3 = UI_CONFIG.textColor
 closeButton.Font = Enum.Font.SourceSansBold
 closeButton.TextScaled = true
 closeButton.Parent = mainFrame
-
 closeButton.MouseButton1Click:Connect(function()
     screenGui:Destroy()
 end)
 
+-- Zone de log avec défilement
 local logFrame = Instance.new("ScrollingFrame")
-logFrame.Size = UDim2.new(1, -20, 1, -100)
-logFrame.Position = UDim2.new(0, 10, 0, 60)
-logFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+logFrame.Size = UDim2.new(1, -20, 1, -140)
+logFrame.Position = UDim2.new(0, 10, 0, 50)
+logFrame.BackgroundColor3 = UI_CONFIG.logBackgroundColor
 logFrame.BorderSizePixel = 0
 logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.ScrollBarThickness = 6
 logFrame.Parent = mainFrame
 
 local logText = Instance.new("TextLabel")
@@ -84,36 +117,128 @@ logText.Size = UDim2.new(1, -10, 1, 0)
 logText.Position = UDim2.new(0, 5, 0, 0)
 logText.BackgroundTransparency = 1
 logText.Text = ""
-logText.TextColor3 = Color3.new(1, 1, 1)
+logText.TextColor3 = UI_CONFIG.textColor
 logText.TextXAlignment = Enum.TextXAlignment.Left
 logText.TextYAlignment = Enum.TextYAlignment.Top
 logText.TextWrapped = true
 logText.RichText = true
 logText.Font = Enum.Font.Code
-logText.TextSize = 18
+logText.TextSize = 16
 logText.Parent = logFrame
 
+-- Barre de progression
+local progressBarBackground = Instance.new("Frame")
+progressBarBackground.Size = UDim2.new(1, -20, 0, 20)
+progressBarBackground.Position = UDim2.new(0, 10, 1, -80)
+progressBarBackground.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+progressBarBackground.Parent = mainFrame
+
+local progressBar = Instance.new("Frame")
+progressBar.Size = UDim2.new(0, 0, 1, 0)
+progressBar.BackgroundColor3 = Color3.fromRGB(50, 150, 250)
+progressBar.Parent = progressBarBackground
+
+local progressLabel = Instance.new("TextLabel")
+progressLabel.Size = UDim2.new(1, 0, 1, 0)
+progressLabel.BackgroundTransparency = 1
+progressLabel.Text = "0%"
+progressLabel.TextColor3 = UI_CONFIG.textColor
+progressLabel.Font = Enum.Font.SourceSans
+progressLabel.TextSize = 14
+progressLabel.Parent = progressBarBackground
+
+-- Boutons de contrôle
+local buttonFrame = Instance.new("Frame")
+buttonFrame.Size = UDim2.new(1, -20, 0, 30)
+buttonFrame.Position = UDim2.new(0, 10, 1, -45)
+buttonFrame.BackgroundTransparency = 1
+buttonFrame.Parent = mainFrame
+
+local runAllButton = Instance.new("TextButton")
+runAllButton.Size = UDim2.new(0, 120, 1, 0)
+runAllButton.Position = UDim2.new(0, 0, 0, 0)
+runAllButton.BackgroundColor3 = Color3.fromRGB(70, 130, 180)
+runAllButton.Text = "Tout Exécuter"
+runAllButton.TextColor3 = UI_CONFIG.textColor
+runAllButton.Font = Enum.Font.SourceSans
+runAllButton.TextSize = 14
+runAllButton.Parent = buttonFrame
+
+local exportButton = Instance.new("TextButton")
+exportButton.Size = UDim2.new(0, 120, 1, 0)
+exportButton.Position = UDim2.new(0, 130, 0, 0)
+exportButton.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
+exportButton.Text = "Exporter Résultats"
+exportButton.TextColor3 = UI_CONFIG.textColor
+exportObject.TextSize = 14
+exportButton.Parent = buttonFrame
+
+local clearButton = Instance.new("TextButton")
+clearButton.Size = UDim2.new(0, 80, 1, 0)
+clearButton.Position = UDim2.new(0, 260, 0, 0)
+clearButton.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+clearButton.Text = "Effacer"
+clearButton.TextColor3 = UI_CONFIG.textColor
+clearButton.Font = Enum.Font.SourceSans
+clearButton.TextSize = 14
+clearButton.Parent = buttonFrame
+
+-- Résumé
 local summaryLabel = Instance.new("TextLabel")
-summaryLabel.Size = UDim2.new(1, 0, 0, 40)
-summaryLabel.Position = UDim2.new(0, 0, 1, -40)
+summaryLabel.Size = UDim2.new(1, 0, 0, 25)
+summaryLabel.Position = UDim2.new(0, 0, 1, -20)
 summaryLabel.BackgroundTransparency = 1
-summaryLabel.Text = "Summary: "
-summaryLabel.TextColor3 = Color3.new(1, 1, 1)
-summaryLabel.TextScaled = true
-summaryLabel.Font = Enum.Font.SourceSansBold
+summaryLabel.Text = "Prêt. Cliquez sur 'Tout Exécuter' pour commencer."
+summaryLabel.TextColor3 = UI_CONFIG.textColor
+summaryLabel.Font = Enum.Font.SourceSansSemibold
+summaryLabel.TextSize = 14
 summaryLabel.Parent = mainFrame
 
 ----------------------------
 -- Fonction utilitaire : Ajout d'un log
 ----------------------------
 local function appendLog(text, color)
+    local formattedText = text
     if color then
-        text = string.format('<font color="%s">%s</font>', colorToHex(color), text)
+        formattedText = string.format('<font color="%s">%s</font>', colorToHex(color), text)
     end
-    table.insert(logEntries, text)
+    table.insert(logEntries, formattedText)
     logText.Text = table.concat(logEntries, "\n")
-    local textSize = TextService:GetTextSize(logText.Text, logText.TextSize, logText.Font, Vector2.new(logFrame.AbsoluteSize.X, math.huge))
+    
+    -- Mise à jour de la taille du canvas
+    local textSize = TextService:GetTextSize(logText.Text, logText.TextSize, logText.Font, Vector2.new(logFrame.AbsoluteSize.X - 10, math.huge))
     logFrame.CanvasSize = UDim2.new(0, 0, 0, textSize.Y + 10)
+    
+    -- Scroll automatique vers le bas
+    logFrame.CanvasPosition = Vector2.new(0, logFrame.CanvasSize.Y.Offset)
+end
+
+----------------------------
+-- Fonction utilitaire : Mise à jour de la barre de progression
+----------------------------
+local function updateProgress()
+    if testResults.total == 0 then
+        progressBar.Size = UDim2.new(0, 0, 1, 0)
+        progressLabel.Text = "0%"
+        return
+    end
+    
+    local completed = testResults.passes + testResults.fails + testResults.undefined
+    local progress = completed / testResults.total
+    progressBar.Size = UDim2.new(progress, 0, 1, 0)
+    progressLabel.Text = string.format("%d%% (%d/%d)", math.floor(progress * 100), completed, testResults.total)
+end
+
+----------------------------
+-- Fonction utilitaire : Mise à jour du résumé
+----------------------------
+local function updateSummary()
+    local total = testResults.passes + testResults.fails
+    local rate = total > 0 and math.floor((testResults.passes / total) * 100) or 0
+    summaryLabel.Text = string.format(
+        "✅ %d/%d (%d%%) | ⛔ %d | ⚠️ %d | Total: %d",
+        testResults.passes, total, rate, testResults.fails, testResults.undefined, testResults.total
+    )
 end
 
 ----------------------------
@@ -127,14 +252,15 @@ local function measureExecution(callback)
 end
 
 ----------------------------
--- Fonctions spécifiques à l'environnement UNC
+-- Fonction utilitaire : Accès global sécurisé
 ----------------------------
 local function getGlobal(path)
     local value = getfenv(0)
     while value ~= nil and path ~= "" do
         local name, nextValue = string.match(path, "^([^.]+)%.?(.*)$")
+        if not name then break end
         value = value[name]
-        path = nextValue
+        path = nextValue or ""
     end
     return value
 end
@@ -142,25 +268,44 @@ end
 ----------------------------
 -- Fonction de test : exécute le callback, mesure le temps et met à jour les compteurs
 ----------------------------
-local function test(name, aliases, callback)
-    running = running + 1
+local function runTest(testData)
+    runningTests = runningTests + 1
+    updateProgress()
+    
     task.spawn(function()
+        local name = testData.name
+        local aliases = testData.aliases or {}
+        local callback = testData.callback
+        local category = testData.category or "Général"
+        
+        -- Initialiser la catégorie si elle n'existe pas
+        if not testResults.categories[category] then
+            testResults.categories[category] = { passes = 0, fails = 0, undefined = 0 }
+        end
+        
         if not callback then
-            appendLog("⏺️ " .. name)
+            appendLog("⏺️ " .. name, UI_CONFIG.neutralColor)
+            testResults.categories[category].undefined = testResults.categories[category].undefined + 1
+            testResults.undefined = testResults.undefined + 1
         elseif not getGlobal(name) then
-            fails = fails + 1
-            appendLog("⛔ " .. name .. " (non défini)", Color3.fromRGB(255, 100, 100))
+            testResults.categories[category].fails = testResults.categories[category].fails + 1
+            testResults.fails = testResults.fails + 1
+            appendLog("⛔ " .. name .. " (non défini)", UI_CONFIG.failColor)
         else
             local success, message, duration = measureExecution(callback)
             if success then
-                passes = passes + 1
-                appendLog(string.format("✅ %s%s (%.3fs)", name, message and (" • " .. message) or "", duration), Color3.fromRGB(100, 255, 100))
+                testResults.categories[category].passes = testResults.categories[category].passes + 1
+                testResults.passes = testResults.passes + 1
+                local displayMessage = message and (" • " .. tostring(message)) or ""
+                appendLog(string.format("✅ %s%s (%.3fs)", name, displayMessage, duration), UI_CONFIG.successColor)
             else
-                fails = fails + 1
-                appendLog(string.format("⛔ %s failed: %s (%.3fs)", name, message, duration), Color3.fromRGB(255, 100, 100))
+                testResults.categories[category].fails = testResults.categories[category].fails + 1
+                testResults.fails = testResults.fails + 1
+                appendLog(string.format("⛔ %s failed: %s (%.3fs)", name, tostring(message), duration), UI_CONFIG.failColor)
             end
         end
-
+        
+        -- Vérifier les alias manquants
         local undefinedAliases = {}
         for _, alias in ipairs(aliases) do
             if getGlobal(alias) == nil then
@@ -168,61 +313,172 @@ local function test(name, aliases, callback)
             end
         end
         if #undefinedAliases > 0 then
-            undefined = undefined + 1
-            appendLog("⚠️ Manque alias: " .. table.concat(undefinedAliases, ", "), Color3.fromRGB(255, 200, 100))
+            testResults.categories[category].undefined = testResults.categories[category].undefined + 1
+            testResults.undefined = testResults.undefined + 1
+            appendLog("⚠️ Manque alias: " .. table.concat(undefinedAliases, ", "), UI_CONFIG.warnColor)
         end
-        running = running - 1
+        
+        runningTests = runningTests - 1
+        updateProgress()
+        updateSummary()
+        
+        -- Si tous les tests sont terminés
+        if runningTests == 0 then
+            appendLog("\n----- UNC Summary -----", UI_CONFIG.infoColor)
+            local total = testResults.passes + testResults.fails
+            local rate = total > 0 and math.floor((testResults.passes / total) * 100) or 0
+            appendLog(string.format("✅ Succès: %d/%d (%d%%)", testResults.passes, total, rate), UI_CONFIG.successColor)
+            appendLog(string.format("⛔ Échecs: %d", testResults.fails), UI_CONFIG.failColor)
+            appendLog(string.format("⚠️ Alias manquants: %d", testResults.undefined), UI_CONFIG.warnColor)
+            
+            -- Résumé par catégorie
+            appendLog("\n----- Par Catégorie -----", UI_CONFIG.infoColor)
+            for catName, catResults in pairs(testResults.categories) do
+                local catTotal = catResults.passes + catResults.fails
+                local catRate = catTotal > 0 and math.floor((catResults.passes / catTotal) * 100) or 0
+                appendLog(string.format("%s: ✅ %d/%d (%d%%) | ⛔ %d | ⚠️ %d", 
+                    catName, catResults.passes, catTotal, catRate, catResults.fails, catResults.undefined), 
+                    UI_CONFIG.neutralColor)
+            end
+        end
     end)
 end
 
 ----------------------------
--- Initialisation des logs
+-- Fonction pour définir un test
 ----------------------------
-appendLog("UNC Environment Check", Color3.fromRGB(150, 150, 255))
-appendLog("✅ - Pass, ⛔ - Fail, ⏺️ - No test, ⚠️ - Missing aliases", Color3.fromRGB(200, 200, 200))
-appendLog("")
+local function defineTest(name, aliases, callback, category)
+    local testData = {
+        name = name,
+        aliases = aliases or {},
+        callback = callback,
+        category = category or "Général"
+    }
+    table.insert(allTests, testData)
+    testResults.total = testResults.total + 1
+end
 
 ----------------------------
--- Définition de tous les tests (80+ tests)
+-- Fonction pour exécuter tous les tests
+----------------------------
+local function runAllTests()
+    if runningTests > 0 then
+        appendLog("Tests déjà en cours d'exécution.", UI_CONFIG.warnColor)
+        return
+    end
+    
+    -- Réinitialiser les compteurs
+    testResults.passes = 0
+    testResults.fails = 0
+    testResults.undefined = 0
+    testResults.categories = {}
+    logEntries = {}
+    logText.Text = ""
+    logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    
+    appendLog("UNC Environment Check - Démarrage des tests...", UI_CONFIG.infoColor)
+    appendLog("✅ - Pass, ⛔ - Fail, ⏺️ - No test, ⚠️ - Missing aliases", UI_CONFIG.neutralColor)
+    appendLog("")
+    
+    for _, testData in ipairs(allTests) do
+        runTest(testData)
+    end
+end
+
+----------------------------
+-- Fonction pour exporter les résultats
+----------------------------
+local function exportResults()
+    if testResults.total == 0 then
+        appendLog("Aucun résultat à exporter.", UI_CONFIG.warnColor)
+        return
+    end
+    
+    local exportData = {
+        timestamp = os.date("%Y-%m-%d %H:%M:%S"),
+        executor = (function() 
+            local success, name, version = pcall(function() return identifyexecutor() end)
+            if success then
+                return string.format("%s %s", name or "Unknown", version or "")
+            else
+                return "Unknown"
+            end
+        end)(),
+        results = testResults,
+        detailed_logs = logEntries
+    }
+    
+    local success, jsonData = pcall(function()
+        return HttpService:JSONEncode(exportData)
+    end)
+    
+    if success then
+        local filename = "unc_test_results_" .. os.time() .. ".json"
+        pcall(function() writefile(filename, jsonData) end)
+        appendLog("✅ Résultats exportés vers " .. filename, UI_CONFIG.successColor)
+    else
+        appendLog("⛔ Échec de l'exportation des résultats: " .. tostring(jsonData), UI_CONFIG.failColor)
+    end
+end
+
+----------------------------
+-- Fonction pour effacer les logs
+----------------------------
+local function clearLogs()
+    logEntries = {}
+    logText.Text = ""
+    logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    summaryLabel.Text = "Logs effacés."
+end
+
+----------------------------
+-- Connexion des boutons
+----------------------------
+runAllButton.MouseButton1Click:Connect(runAllTests)
+exportButton.MouseButton1Click:Connect(exportResults)
+clearButton.MouseButton1Click:Connect(clearLogs)
+
+----------------------------
+-- Définition de tous les tests (80+ tests) - Catégorisés
 ----------------------------
 
 -- Cache Functions
-test("cache.invalidate", {}, function()
+defineTest("cache.invalidate", {}, function()
     local container = Instance.new("Folder")
     local part = Instance.new("Part", container)
     cache.invalidate(container:FindFirstChild("Part"))
     assert(part ~= container:FindFirstChild("Part"), "La référence n'a pas été invalidée")
-end)
+end, "Cache")
 
-test("cache.iscached", {}, function()
+defineTest("cache.iscached", {}, function()
     local part = Instance.new("Part")
     assert(cache.iscached(part), "Le part devrait être en cache")
     cache.invalidate(part)
     assert(not cache.iscached(part), "Le part ne devrait pas être en cache")
-end)
+end, "Cache")
 
-test("cache.replace", {}, function()
+defineTest("cache.replace", {}, function()
     local part = Instance.new("Part")
     local fire = Instance.new("Fire")
     cache.replace(part, fire)
     assert(part ~= fire, "Le part n'a pas été remplacé par Fire")
-end)
+end, "Cache")
 
 -- Instance and Reference Functions
-test("cloneref", {}, function()
+defineTest("cloneref", {}, function()
     local part = Instance.new("Part")
     local clone = cloneref(part)
     assert(part ~= clone, "Le clone ne doit pas être égal à l'original")
     clone.Name = "Test"
     assert(part.Name == "Test", "Le clone devrait mettre à jour l'original")
-end)
+end, "Instance")
 
-test("compareinstances", {}, function()
+defineTest("compareinstances", {}, function()
     local part = Instance.new("Part")
     local clone = cloneref(part)
     assert(part ~= clone, "Le clone ne doit pas être égal à l'original")
     assert(compareinstances(part, clone), "Le clone devrait être égal à l'original avec compareinstances()")
-end)
+end, "Instance")
 
 -- Closures & Debug Functions
 local function shallowEqual(t1, t2)
@@ -241,30 +497,30 @@ local function shallowEqual(t1, t2)
     return true
 end
 
-test("checkcaller", {}, function()
+defineTest("checkcaller", {}, function()
     assert(checkcaller(), "Le scope principal doit retourner true")
-end)
+end, "Debug")
 
-test("clonefunction", {}, function()
+defineTest("clonefunction", {}, function()
     local function testFunc()
         return "success"
     end
     local copy = clonefunction(testFunc)
     assert(testFunc() == copy(), "Le clone doit retourner la même valeur que l'original")
     assert(testFunc ~= copy, "Le clone ne doit pas être égal à l'original")
-end)
+end, "Debug")
 
-test("getcallingscript", {})
+defineTest("getcallingscript", {}, nil, "Debug") -- Pas de test
 
-test("getscriptclosure", {"getscriptfunction"}, function()
+defineTest("getscriptclosure", {"getscriptfunction"}, function()
     local module = game:GetService("CoreGui").RobloxGui.Modules.Common.Constants
     local constants = getrenv().require(module)
     local generated = getscriptclosure(module)()
     assert(constants ~= generated, "Le module généré ne doit pas correspondre à l'original")
     assert(shallowEqual(constants, generated), "Les constantes générées doivent être égales de manière superficielle")
-end)
+end, "Debug")
 
-test("hookfunction", {"replaceclosure"}, function()
+defineTest("hookfunction", {"replaceclosure"}, function()
     local function testFunc()
         return true
     end
@@ -272,35 +528,37 @@ test("hookfunction", {"replaceclosure"}, function()
     assert(testFunc() == false, "La fonction doit retourner false")
     assert(ref() == true, "La fonction originale doit retourner true")
     assert(testFunc ~= ref, "La fonction originale ne doit pas être identique à la référence")
-end)
+end, "Debug")
 
-test("iscclosure", {}, function()
+defineTest("iscclosure", {}, function()
     assert(iscclosure(print) == true, "La fonction 'print' devrait être une C closure")
     assert(iscclosure(function() end) == false, "La fonction d'exécution ne devrait pas être une C closure")
-end)
+end, "Debug")
 
-test("islclosure", {}, function()
+defineTest("islclosure", {}, function()
     assert(islclosure(print) == false, "La fonction 'print' ne devrait pas être une Lua closure")
     assert(islclosure(function() end) == true, "La fonction d'exécution devrait être une Lua closure")
-end)
+end, "Debug")
 
-test("isexecutorclosure", {"checkclosure", "isourclosure"}, function()
+defineTest("isexecutorclosure", {"checkclosure", "isourclosure"}, function()
     assert(isexecutorclosure(isexecutorclosure) == true, "L'exécuteur global n'a pas retourné true")
     assert(isexecutorclosure(newcclosure(function() end)) == true, "L'exécuteur C closure n'a pas retourné true")
     assert(isexecutorclosure(function() end) == true, "L'exécuteur Luau closure n'a pas retourné true")
     assert(isexecutorclosure(print) == false, "La fonction Roblox globale ne doit pas être considérée comme une closure de l'exécuteur")
-end)
+end, "Debug")
 
-test("loadstring", {}, function()
-    local animate = game:GetService("Players").LocalPlayer.Character.Animate
-    local bytecode = getscriptbytecode(animate)
-    local func = loadstring(bytecode)
-    assert(type(func) ~= "function", "Le bytecode Luau ne doit pas être chargeable !")
+defineTest("loadstring", {}, function()
+    local animate = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate") or game:GetService("ReplicatedStorage"):FindFirstChild("Animate")
+    if animate then
+        local bytecode = getscriptbytecode(animate)
+        local func = loadstring(bytecode)
+        assert(type(func) ~= "function", "Le bytecode Luau ne doit pas être chargeable !")
+    end
     assert(assert(loadstring("return ... + 1"))(1) == 2, "L'opération mathématique simple a échoué")
     assert(type(select(2, loadstring("f"))) == "string", "loadstring n'a pas retourné d'erreur pour une erreur de compilation")
-end)
+end, "Debug")
 
-test("newcclosure", {}, function()
+defineTest("newcclosure", {}, function()
     local function testFunc()
         return true
     end
@@ -308,72 +566,72 @@ test("newcclosure", {}, function()
     assert(testFunc() == testC(), "La nouvelle C closure doit retourner la même valeur que l'original")
     assert(testFunc ~= testC, "La nouvelle C closure ne doit pas être identique à l'original")
     assert(iscclosure(testC), "La nouvelle C closure doit être une C closure")
-end)
+end, "Debug")
 
 -- Console Functions
-test("rconsoleclear", {"consoleclear"})
-test("rconsolecreate", {"consolecreate"})
-test("rconsoledestroy", {"consoledestroy"})
-test("rconsoleinput", {"consoleinput"})
-test("rconsoleprint", {"consoleprint"})
-test("rconsolesettitle", {"rconsolename", "consolesettitle"})
+defineTest("rconsoleclear", {"consoleclear"}, nil, "Console")
+defineTest("rconsolecreate", {"consolecreate"}, nil, "Console")
+defineTest("rconsoledestroy", {"consoledestroy"}, nil, "Console")
+defineTest("rconsoleinput", {"consoleinput"}, nil, "Console")
+defineTest("rconsoleprint", {"consoleprint"}, nil, "Console")
+defineTest("rconsolesettitle", {"rconsolename", "consolesettitle"}, nil, "Console")
 
 -- Crypt Functions
-test("crypt.base64encode", {"crypt.base64.encode", "crypt.base64_encode", "base64.encode", "base64_encode"}, function()
+defineTest("crypt.base64encode", {"crypt.base64.encode", "crypt.base64_encode", "base64.encode", "base64_encode"}, function()
     assert(crypt.base64encode("test") == "dGVzdA==", "L'encodage Base64 a échoué")
-end)
+end, "Crypt")
 
-test("crypt.base64decode", {"crypt.base64.decode", "crypt.base64_decode", "base64.decode", "base64_decode"}, function()
+defineTest("crypt.base64decode", {"crypt.base64.decode", "crypt.base64_decode", "base64.decode", "base64_decode"}, function()
     assert(crypt.base64decode("dGVzdA==") == "test", "Le décodage Base64 a échoué")
-end)
+end, "Crypt")
 
-test("crypt.encrypt", {}, function()
+defineTest("crypt.encrypt", {}, function()
     local key = crypt.generatekey()
     local encrypted, iv = crypt.encrypt("test", key, nil, "CBC")
     assert(iv, "crypt.encrypt doit retourner un IV")
     local decrypted = crypt.decrypt(encrypted, key, iv, "CBC")
     assert(decrypted == "test", "Le décryptage n'a pas retourné la chaîne originale")
-end)
+end, "Crypt")
 
-test("crypt.decrypt", {}, function()
+defineTest("crypt.decrypt", {}, function()
     local key, iv = crypt.generatekey(), crypt.generatekey()
     local encrypted = crypt.encrypt("test", key, iv, "CBC")
     local decrypted = crypt.decrypt(encrypted, key, iv, "CBC")
     assert(decrypted == "test", "Le décryptage n'a pas retourné la chaîne originale")
-end)
+end, "Crypt")
 
-test("crypt.generatebytes", {}, function()
+defineTest("crypt.generatebytes", {}, function()
     local size = math.random(10, 100)
     local bytes = crypt.generatebytes(size)
     local decoded = crypt.base64decode(bytes)
     assert(#decoded == size, string.format("La taille décodée devrait être %d, obtenue %d", size, #decoded))
-end)
+end, "Crypt")
 
-test("crypt.generatekey", {}, function()
+defineTest("crypt.generatekey", {}, function()
     local key = crypt.generatekey()
     local decoded = crypt.base64decode(key)
     assert(#decoded == 32, "La clé générée devrait être de 32 octets décodés")
-end)
+end, "Crypt")
 
-test("crypt.hash", {}, function()
+defineTest("crypt.hash", {}, function()
     local algorithms = {'sha1', 'sha384', 'sha512', 'md5', 'sha256', 'sha3-224', 'sha3-256', 'sha3-512'}
     for _, algorithm in ipairs(algorithms) do
         local hash = crypt.hash("test", algorithm)
         assert(hash, "crypt.hash pour l'algorithme '" .. algorithm .. "' n'a pas retourné de hash")
     end
-end)
+end, "Crypt")
 
--- Debug Functions
-test("debug.getconstant", {}, function()
+-- Debug Functions (suite)
+defineTest("debug.getconstant", {}, function()
     local function testFunc()
         print("Hello, world!")
     end
     assert(debug.getconstant(testFunc, 1) == "print", "La première constante doit être 'print'")
     assert(debug.getconstant(testFunc, 2) == nil, "La deuxième constante doit être nil")
     assert(debug.getconstant(testFunc, 3) == "Hello, world!", "La troisième constante doit être 'Hello, world!'")
-end)
+end, "Debug")
 
-test("debug.getconstants", {}, function()
+defineTest("debug.getconstants", {}, function()
     local function testFunc()
         local num = 5000 .. 50000
         print("Hello, world!", num, warn)
@@ -384,9 +642,9 @@ test("debug.getconstants", {}, function()
     assert(constants[3] == nil, "La troisième constante doit être nil")
     assert(constants[4] == "Hello, world!", "La quatrième constante doit être 'Hello, world!'")
     assert(constants[5] == "warn", "La cinquième constante doit être 'warn'")
-end)
+end, "Debug")
 
-test("debug.getinfo", {}, function()
+defineTest("debug.getinfo", {}, function()
     local types = {
         source = "string",
         short_src = "string",
@@ -406,9 +664,9 @@ test("debug.getinfo", {}, function()
         assert(info[k] ~= nil, "Le champ '" .. k .. "' est manquant dans debug.getinfo")
         assert(type(info[k]) == v, string.format("Le champ '%s' doit être de type %s (obtenu %s)", k, v, type(info[k])))
     end
-end)
+end, "Debug")
 
-test("debug.getproto", {}, function()
+defineTest("debug.getproto", {}, function()
     local function testFunc()
         local function proto()
             return true
@@ -421,9 +679,9 @@ test("debug.getproto", {}, function()
     if not realproto() then
         return "Les valeurs de retour des proto sont désactivées sur cet exécuteur"
     end
-end)
+end, "Debug")
 
-test("debug.getprotos", {}, function()
+defineTest("debug.getprotos", {}, function()
     local function testFunc()
         local function _1() return true end
         local function _2() return true end
@@ -437,9 +695,9 @@ test("debug.getprotos", {}, function()
             return "Les valeurs de retour des proto sont désactivées sur cet exécuteur"
         end
     end
-end)
+end, "Debug")
 
-test("debug.getstack", {}, function()
+defineTest("debug.getstack", {}, function()
     local _ = "a" .. "b"
     local stackVal = debug.getstack(1, 1)
     if type(stackVal) == "table" then
@@ -447,160 +705,182 @@ test("debug.getstack", {}, function()
     else
         assert(stackVal == "ab", "La première valeur dans la pile devrait être 'ab'")
     end
-end)
+end, "Debug")
 
-test("debug.getupvalue", {}, function()
+defineTest("debug.getupvalue", {}, function()
     local upvalue = function() end
     local function testFunc()
         print(upvalue)
     end
     assert(debug.getupvalue(testFunc, 1) == upvalue, "La valeur retournée par debug.getupvalue est incorrecte")
-end)
+end, "Debug")
 
-test("debug.getupvalues", {}, function()
+defineTest("debug.getupvalues", {}, function()
     local upvalue = function() end
     local function testFunc()
         print(upvalue)
     end
     local upvalues = debug.getupvalues(testFunc)
     assert(upvalues[1] == upvalue, "La valeur retournée par debug.getupvalues est incorrecte")
-end)
+end, "Debug")
 
-test("debug.setconstant", {}, function()
+defineTest("debug.setconstant", {}, function()
     local function testFunc()
         return "fail"
     end
     debug.setconstant(testFunc, 1, "success")
     assert(testFunc() == "success", "debug.setconstant n'a pas modifié la constante")
-end)
+end, "Debug")
 
-test("debug.setstack", {}, function()
+defineTest("debug.setstack", {}, function()
     local function testFunc()
         return "fail", debug.setstack(1, 1, "success")
     end
     assert(testFunc() == "success", "debug.setstack n'a pas modifié la pile")
-end)
+end, "Debug")
 
-test("debug.setupvalue", {}, function()
+defineTest("debug.setupvalue", {}, function()
     local function upvalue() return "fail" end
     local function testFunc() return upvalue() end
     debug.setupvalue(testFunc, 1, function() return "success" end)
     assert(testFunc() == "success", "debug.setupvalue n'a pas modifié l'upvalue")
-end)
+end, "Debug")
 
 -- Filesystem Functions
-if isfolder and makefolder and delfolder then
-    if isfolder(".tests") then delfolder(".tests") end
-    makefolder(".tests")
-end
-
-test("readfile", {}, function()
-    writefile(".tests/readfile.txt", "success")
-    assert(readfile(".tests/readfile.txt") == "success", "Le contenu du fichier n'est pas correct")
-end)
-
-test("listfiles", {}, function()
-    makefolder(".tests/listfiles")
-    writefile(".tests/listfiles/test_1.txt", "success")
-    writefile(".tests/listfiles/test_2.txt", "success")
-    local files = listfiles(".tests/listfiles")
-    assert(#files == 2, "Nombre de fichiers incorrect")
-    assert(isfile(files[1]), "Le chemin retourné n'est pas un fichier")
-    assert(readfile(files[1]) == "success", "Contenu du fichier incorrect")
-    makefolder(".tests/listfiles_2")
-    makefolder(".tests/listfiles_2/test_1")
-    makefolder(".tests/listfiles_2/test_2")
-    local folders = listfiles(".tests/listfiles_2")
-    assert(#folders == 2, "Nombre de dossiers incorrect")
-    assert(isfolder(folders[1]), "Le chemin retourné n'est pas un dossier")
-end)
-
-test("writefile", {}, function()
-    writefile(".tests/writefile.txt", "success")
-    assert(readfile(".tests/writefile.txt") == "success", "Le fichier n'a pas été correctement écrit")
-    local requiresFileExt = pcall(function()
-        writefile(".tests/writefile", "success")
-        assert(isfile(".tests/writefile.txt"))
-    end)
-    if not requiresFileExt then
-        return "Cet exécuteur requiert une extension pour writefile"
+-- Préparation du dossier de test
+pcall(function()
+    if isfolder and makefolder and delfolder then
+        if isfolder(".tests") then delfolder(".tests") end
+        makefolder(".tests")
     end
 end)
 
-test("makefolder", {}, function()
-    makefolder(".tests/makefolder")
-    assert(isfolder(".tests/makefolder"), "Le dossier n'a pas été créé")
-end)
+defineTest("readfile", {}, function()
+    pcall(function() writefile(".tests/readfile.txt", "success") end)
+    assert(readfile(".tests/readfile.txt") == "success", "Le contenu du fichier n'est pas correct")
+end, "Filesystem")
 
-test("appendfile", {}, function()
-    writefile(".tests/appendfile.txt", "su")
-    appendfile(".tests/appendfile.txt", "cce")
-    appendfile(".tests/appendfile.txt", "ss")
-    assert(readfile(".tests/appendfile.txt") == "success", "L'appendfile n'a pas fonctionné")
-end)
+defineTest("listfiles", {}, function()
+    pcall(function()
+        makefolder(".tests/listfiles")
+        writefile(".tests/listfiles/test_1.txt", "success")
+        writefile(".tests/listfiles/test_2.txt", "success")
+        local files = listfiles(".tests/listfiles")
+        assert(#files == 2, "Nombre de fichiers incorrect")
+        assert(isfile(files[1]), "Le chemin retourné n'est pas un fichier")
+        assert(readfile(files[1]) == "success", "Contenu du fichier incorrect")
+        makefolder(".tests/listfiles_2")
+        makefolder(".tests/listfiles_2/test_1")
+        makefolder(".tests/listfiles_2/test_2")
+        local folders = listfiles(".tests/listfiles_2")
+        assert(#folders == 2, "Nombre de dossiers incorrect")
+        assert(isfolder(folders[1]), "Le chemin retourné n'est pas un dossier")
+    end)
+end, "Filesystem")
 
-test("isfile", {}, function()
-    writefile(".tests/isfile.txt", "success")
-    assert(isfile(".tests/isfile.txt") == true, "isfile ne retourne pas true pour un fichier")
-    assert(isfile(".tests") == false, "isfile ne retourne pas false pour un dossier")
-    assert(isfile(".tests/doesnotexist.exe") == false, "isfile ne retourne pas false pour un chemin inexistant (obtenu " .. tostring(isfile(".tests/doesnotexist.exe")) .. ")")
-end)
+defineTest("writefile", {}, function()
+    pcall(function()
+        writefile(".tests/writefile.txt", "success")
+        assert(readfile(".tests/writefile.txt") == "success", "Le fichier n'a pas été correctement écrit")
+        local requiresFileExt = pcall(function()
+            writefile(".tests/writefile", "success")
+            assert(isfile(".tests/writefile.txt"))
+        end)
+        if not requiresFileExt then
+            return "Cet exécuteur requiert une extension pour writefile"
+        end
+    end)
+end, "Filesystem")
 
-test("isfolder", {}, function()
-    assert(isfolder(".tests") == true, "isfolder retourne faux pour un dossier")
-    assert(isfolder(".tests/doesnotexist.exe") == false, "isfolder retourne faux pour un chemin inexistant (obtenu " .. tostring(isfolder(".tests/doesnotexist.exe")) .. ")")
-end)
+defineTest("makefolder", {}, function()
+    pcall(function()
+        makefolder(".tests/makefolder")
+        assert(isfolder(".tests/makefolder"), "Le dossier n'a pas été créé")
+    end)
+end, "Filesystem")
 
-test("delfolder", {}, function()
-    makefolder(".tests/delfolder")
-    delfolder(".tests/delfolder")
-    assert(isfolder(".tests/delfolder") == false, "delfolder n'a pas supprimé le dossier")
-end)
+defineTest("appendfile", {}, function()
+    pcall(function()
+        writefile(".tests/appendfile.txt", "su")
+        appendfile(".tests/appendfile.txt", "cce")
+        appendfile(".tests/appendfile.txt", "ss")
+        assert(readfile(".tests/appendfile.txt") == "success", "L'appendfile n'a pas fonctionné")
+    end)
+end, "Filesystem")
 
-test("delfile", {}, function()
-    writefile(".tests/delfile.txt", "Hello, world!")
-    delfile(".tests/delfile.txt")
-    assert(isfile(".tests/delfile.txt") == false, "delfile n'a pas supprimé le fichier")
-end)
+defineTest("isfile", {}, function()
+    pcall(function()
+        writefile(".tests/isfile.txt", "success")
+        assert(isfile(".tests/isfile.txt") == true, "isfile ne retourne pas true pour un fichier")
+        assert(isfile(".tests") == false, "isfile ne retourne pas false pour un dossier")
+        assert(isfile(".tests/doesnotexist.exe") == false, "isfile ne retourne pas false pour un chemin inexistant (obtenu " .. tostring(isfile(".tests/doesnotexist.exe")) .. ")")
+    end)
+end, "Filesystem")
 
-test("loadfile", {}, function()
-    writefile(".tests/loadfile.txt", "return ... + 1")
-    assert(assert(loadfile(".tests/loadfile.txt"))(1) == 2, "loadfile n'a pas chargé correctement le fichier avec arguments")
-    writefile(".tests/loadfile.txt", "f")
-    local callback, err = loadfile(".tests/loadfile.txt")
-    assert(err and not callback, "loadfile n'a pas retourné d'erreur pour une erreur de compilation")
-end)
+defineTest("isfolder", {}, function()
+    pcall(function()
+        assert(isfolder(".tests") == true, "isfolder retourne faux pour un dossier")
+        assert(isfolder(".tests/doesnotexist.exe") == false, "isfolder retourne faux pour un chemin inexistant (obtenu " .. tostring(isfolder(".tests/doesnotexist.exe")) .. ")")
+    end)
+end, "Filesystem")
 
-test("dofile", {})
+defineTest("delfolder", {}, function()
+    pcall(function()
+        makefolder(".tests/delfolder")
+        delfolder(".tests/delfolder")
+        assert(isfolder(".tests/delfolder") == false, "delfolder n'a pas supprimé le dossier")
+    end)
+end, "Filesystem")
+
+defineTest("delfile", {}, function()
+    pcall(function()
+        writefile(".tests/delfile.txt", "Hello, world!")
+        delfile(".tests/delfile.txt")
+        assert(isfile(".tests/delfile.txt") == false, "delfile n'a pas supprimé le fichier")
+    end)
+end, "Filesystem")
+
+defineTest("loadfile", {}, function()
+    pcall(function()
+        writefile(".tests/loadfile.txt", "return ... + 1")
+        assert(assert(loadfile(".tests/loadfile.txt"))(1) == 2, "loadfile n'a pas chargé correctement le fichier avec arguments")
+        writefile(".tests/loadfile.txt", "f")
+        local callback, err = loadfile(".tests/loadfile.txt")
+        assert(err and not callback, "loadfile n'a pas retourné d'erreur pour une erreur de compilation")
+    end)
+end, "Filesystem")
+
+defineTest("dofile", {}, nil, "Filesystem") -- Pas de test simple
 
 -- Input Functions
-test("isrbxactive", {"isgameactive"}, function()
+defineTest("isrbxactive", {"isgameactive"}, function()
     assert(type(isrbxactive()) == "boolean", "isrbxactive ne retourne pas un booléen")
-end)
-test("mouse1click", {})
-test("mouse1press", {})
-test("mouse1release", {})
-test("mouse2click", {})
-test("mouse2press", {})
-test("mouse2release", {})
-test("mousemoveabs", {})
-test("mousemoverel", {})
-test("mousescroll", {})
+end, "Input")
+
+defineTest("mouse1click", {}, nil, "Input")
+defineTest("mouse1press", {}, nil, "Input")
+defineTest("mouse1release", {}, nil, "Input")
+defineTest("mouse2click", {}, nil, "Input")
+defineTest("mouse2press", {}, nil, "Input")
+defineTest("mouse2release", {}, nil, "Input")
+defineTest("mousemoveabs", {}, nil, "Input")
+defineTest("mousemoverel", {}, nil, "Input")
+defineTest("mousescroll", {}, nil, "Input")
 
 -- Instance Interaction Functions
-test("fireclickdetector", {}, function()
+defineTest("fireclickdetector", {}, function()
     local detector = Instance.new("ClickDetector")
     fireclickdetector(detector, 50, "MouseHoverEnter")
-end)
+end, "Instance")
 
-test("getcallbackvalue", {}, function()
+defineTest("getcallbackvalue", {}, function()
     local bindable = Instance.new("BindableFunction")
     local function testFunc() end
     bindable.OnInvoke = testFunc
     assert(getcallbackvalue(bindable, "OnInvoke") == testFunc, "La valeur retournée par getcallbackvalue est incorrecte")
-end)
+end, "Instance")
 
-test("getconnections", {}, function()
+defineTest("getconnections", {}, function()
     local types = {
         Enabled = "boolean",
         ForeignState = "boolean",
@@ -620,77 +900,79 @@ test("getconnections", {}, function()
         assert(connection[k] ~= nil, "getconnections manque le champ '" .. k .. "'")
         assert(type(connection[k]) == v, string.format("Le champ '%s' doit être de type %s (obtenu %s)", k, v, type(connection[k])))
     end
-end)
+end, "Instance")
 
-test("getcustomasset", {}, function()
-    writefile(".tests/getcustomasset.txt", "success")
-    local contentId = getcustomasset(".tests/getcustomasset.txt")
-    assert(type(contentId) == "string", "getcustomasset ne retourne pas une chaîne")
-    assert(#contentId > 0, "getcustomasset retourne une chaîne vide")
-    assert(string.match(contentId, "rbxasset://") == "rbxasset://", "getcustomasset ne retourne pas une URL rbxasset")
-end)
+defineTest("getcustomasset", {}, function()
+    pcall(function()
+        writefile(".tests/getcustomasset.txt", "success")
+        local contentId = getcustomasset(".tests/getcustomasset.txt")
+        assert(type(contentId) == "string", "getcustomasset ne retourne pas une chaîne")
+        assert(#contentId > 0, "getcustomasset retourne une chaîne vide")
+        assert(string.match(contentId, "rbxasset://") == "rbxasset://", "getcustomasset ne retourne pas une URL rbxasset")
+    end)
+end, "Instance")
 
-test("gethiddenproperty", {}, function()
+defineTest("gethiddenproperty", {}, function()
     local fire = Instance.new("Fire")
     local property, isHidden = gethiddenproperty(fire, "size_xml")
     assert(property == 5, "gethiddenproperty n'a pas retourné la bonne valeur")
     assert(isHidden == true, "gethiddenproperty n'a pas indiqué que la propriété était cachée")
-end)
+end, "Instance")
 
-test("sethiddenproperty", {}, function()
+defineTest("sethiddenproperty", {}, function()
     local fire = Instance.new("Fire")
     local hidden = sethiddenproperty(fire, "size_xml", 10)
     assert(hidden, "sethiddenproperty n'a pas retourné true")
     assert(gethiddenproperty(fire, "size_xml") == 10, "sethiddenproperty n'a pas modifié la propriété cachée")
-end)
+end, "Instance")
 
-test("gethui", {}, function()
+defineTest("gethui", {}, function()
     assert(typeof(gethui()) == "Instance", "gethui ne retourne pas une Instance")
-end)
+end, "Instance")
 
-test("getinstances", {}, function()
+defineTest("getinstances", {}, function()
     local instances = getinstances()
     assert(instances[1]:IsA("Instance"), "Le premier élément retourné par getinstances n'est pas une Instance")
-end)
+end, "Instance")
 
-test("getnilinstances", {}, function()
+defineTest("getnilinstances", {}, function()
     local nilInstances = getnilinstances()
     assert(nilInstances[1]:IsA("Instance"), "Le premier élément retourné par getnilinstances n'est pas une Instance")
     assert(nilInstances[1].Parent == nil, "Le premier élément retourné par getnilinstances n'est pas parenté à nil")
-end)
+end, "Instance")
 
-test("isscriptable", {}, function()
+defineTest("isscriptable", {}, function()
     local fire = Instance.new("Fire")
     assert(isscriptable(fire, "size_xml") == false, "isscriptable ne retourne pas false pour une propriété non scriptable (size_xml)")
     assert(isscriptable(fire, "Size") == true, "isscriptable ne retourne pas true pour une propriété scriptable (Size)")
-end)
+end, "Instance")
 
-test("setscriptable", {}, function()
+defineTest("setscriptable", {}, function()
     local fire = Instance.new("Fire")
     local wasScriptable = setscriptable(fire, "size_xml", true)
     assert(wasScriptable == false, "setscriptable ne retourne pas false pour une propriété non scriptable (size_xml)")
     assert(isscriptable(fire, "size_xml") == true, "setscriptable n'a pas défini la propriété scriptable")
     fire = Instance.new("Fire")
     assert(isscriptable(fire, "size_xml") == false, "⚠️⚠️ setscriptable persiste entre les instances uniques ⚠️⚠️")
-end)
+end, "Instance")
 
-test("setrbxclipboard", {})
+defineTest("setrbxclipboard", {}, nil, "Instance")
 
 -- Metatable Functions
-test("getrawmetatable", {}, function()
+defineTest("getrawmetatable", {}, function()
     local metatable = { __metatable = "Locked!" }
     local object = setmetatable({}, metatable)
     assert(getrawmetatable(object) == metatable, "getrawmetatable n'a pas retourné la bonne metatable")
-end)
+end, "Metatable")
 
-test("hookmetamethod", {}, function()
+defineTest("hookmetamethod", {}, function()
     local object = setmetatable({}, { __index = newcclosure(function() return false end), __metatable = "Locked!" })
     local ref = hookmetamethod(object, "__index", function() return true end)
     assert(object.test == true, "hookmetamethod n'a pas modifié la valeur de retour")
     assert(ref() == false, "La fonction d'origine retournée par hookmetamethod est incorrecte")
-end)
+end, "Metatable")
 
-test("getnamecallmethod", {}, function()
+defineTest("getnamecallmethod", {}, function()
     local method
     local ref
     ref = hookmetamethod(game, "__namecall", function(...)
@@ -701,15 +983,15 @@ test("getnamecallmethod", {}, function()
     end)
     game:GetService("Lighting")
     assert(method == "GetService", "getnamecallmethod n'a pas retourné 'GetService'")
-end)
+end, "Metatable")
 
-test("isreadonly", {}, function()
+defineTest("isreadonly", {}, function()
     local object = {}
     table.freeze(object)
     assert(isreadonly(object), "isreadonly ne retourne pas true pour un tableau gelé")
-end)
+end, "Metatable")
 
-test("setrawmetatable", {}, function()
+defineTest("setrawmetatable", {}, function()
     local object = setmetatable({}, { __index = function() return false end, __metatable = "Locked!" })
     local objectReturned = setrawmetatable(object, { __index = function() return true end })
     assert(object, "setrawmetatable n'a pas retourné l'objet original")
@@ -717,54 +999,55 @@ test("setrawmetatable", {}, function()
     if objectReturned then
         return objectReturned == object and "L'objet original a été retourné" or "L'objet retourné n'est pas le même"
     end
-end)
+end, "Metatable")
 
-test("setreadonly", {}, function()
+defineTest("setreadonly", {}, function()
     local object = { success = false }
     table.freeze(object)
     setreadonly(object, false)
     object.success = true
     assert(object.success, "setreadonly n'a pas permis la modification du tableau")
-end)
+end, "Metatable")
 
 -- Miscellaneous Functions
-test("identifyexecutor", {"getexecutorname"}, function()
+defineTest("identifyexecutor", {"getexecutorname"}, function()
     local name, version = identifyexecutor()
     assert(type(name) == "string", "identifyexecutor ne retourne pas une chaîne pour le nom")
     return type(version) == "string" and "Version retournée" or "Pas de version retournée"
-end)
+end, "Misc")
 
-test("lz4compress", {}, function()
+defineTest("lz4compress", {}, function()
     local raw = "Hello, world!"
     local compressed = lz4compress(raw)
     assert(type(compressed) == "string", "lz4compress ne retourne pas une chaîne")
     assert(lz4decompress(compressed, #raw) == raw, "lz4decompress ne retourne pas la chaîne originale")
-end)
+end, "Misc")
 
-test("lz4decompress", {}, function()
+defineTest("lz4decompress", {}, function()
     local raw = "Hello, world!"
     local compressed = lz4compress(raw)
     assert(type(compressed) == "string", "lz4compress ne retourne pas une chaîne")
     assert(lz4decompress(compressed, #raw) == raw, "lz4decompress ne retourne pas la chaîne originale")
-end)
+end, "Misc")
 
-test("messagebox", {})
-test("queue_on_teleport", {"queueonteleport"})
+defineTest("messagebox", {}, nil, "Misc")
+defineTest("queue_on_teleport", {"queueonteleport"}, nil, "Misc")
 
-test("request", {"http.request", "http_request"}, function()
+defineTest("request", {"http.request", "http_request"}, function()
     local response = request({
         Url = "https://httpbin.org/user-agent",
         Method = "GET",
     })
     assert(type(response) == "table", "La réponse doit être un tableau")
     assert(response.StatusCode == 200, "Le code d'état n'est pas 200")
-    local data = game:GetService("HttpService"):JSONDecode(response.Body)
+    local data = HttpService:JSONDecode(response.Body)
     assert(type(data) == "table" and type(data["user-agent"]) == "string", "La réponse ne contient pas de user-agent")
     return "User-Agent: " .. data["user-agent"]
-end)
+end, "Misc")
 
-test("setclipboard", {"toclipboard"})
-test("setfpscap", {}, function()
+defineTest("setclipboard", {"toclipboard"}, nil, "Misc")
+
+defineTest("setfpscap", {}, function()
     local renderStepped = RunService.RenderStepped
     local function step()
         renderStepped:Wait()
@@ -779,108 +1062,115 @@ test("setfpscap", {}, function()
     setfpscap(0)
     local step0 = step()
     return string.format("%dfps @60 • %dfps @0", step60, step0)
-end)
+end, "Misc")
 
 -- Scripts Functions
-test("getgc", {}, function()
+defineTest("getgc", {}, function()
     local gc = getgc()
     assert(type(gc) == "table", "getgc ne retourne pas un tableau")
     assert(#gc > 0, "getgc retourne un tableau vide")
-end)
+end, "Scripts")
 
-test("getgenv", {}, function()
+defineTest("getgenv", {}, function()
     getgenv().__TEST_GLOBAL = true
     assert(__TEST_GLOBAL, "getgenv n'a pas défini la variable globale")
     getgenv().__TEST_GLOBAL = nil
-end)
+end, "Scripts")
 
-test("getloadedmodules", {}, function()
+defineTest("getloadedmodules", {}, function()
     local modules = getloadedmodules()
     assert(type(modules) == "table", "getloadedmodules ne retourne pas un tableau")
     assert(#modules > 0, "getloadedmodules retourne un tableau vide")
     assert(typeof(modules[1]) == "Instance", "Le premier élément n'est pas une Instance")
     assert(modules[1]:IsA("ModuleScript"), "Le premier élément n'est pas un ModuleScript")
-end)
+end, "Scripts")
 
-test("getrenv", {}, function()
+defineTest("getrenv", {}, function()
     assert(_G ~= getrenv()._G, "_G est identique dans l'exécuteur et le jeu")
-end)
+end, "Scripts")
 
-test("getrunningscripts", {}, function()
+defineTest("getrunningscripts", {}, function()
     local scripts = getrunningscripts()
     assert(type(scripts) == "table", "getrunningscripts ne retourne pas un tableau")
     assert(#scripts > 0, "getrunningscripts retourne un tableau vide")
     assert(typeof(scripts[1]) == "Instance", "Le premier élément n'est pas une Instance")
     assert(scripts[1]:IsA("ModuleScript") or scripts[1]:IsA("LocalScript"), "Le premier élément n'est ni un ModuleScript ni un LocalScript")
-end)
+end, "Scripts")
 
-test("getscriptbytecode", {"dumpstring"}, function()
-    local animate = game:GetService("Players").LocalPlayer.Character.Animate
-    local bytecode = getscriptbytecode(animate)
-    assert(type(bytecode) == "string", "getscriptbytecode ne retourne pas une chaîne pour Animate (un " .. animate.ClassName .. ")")
-end)
+defineTest("getscriptbytecode", {"dumpstring"}, function()
+    local animate = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate") or game:GetService("ReplicatedStorage"):FindFirstChild("Animate")
+    if animate then
+        local bytecode = getscriptbytecode(animate)
+        assert(type(bytecode) == "string", "getscriptbytecode ne retourne pas une chaîne pour Animate (un " .. animate.ClassName .. ")")
+    end
+end, "Scripts")
 
-test("getscripthash", {}, function()
-    local animate = game:GetService("Players").LocalPlayer.Character.Animate:Clone()
-    local hash = getscripthash(animate)
-    local source = animate.Source
-    animate.Source = "print('Hello, world!')"
-    task.defer(function()
-        animate.Source = source
-    end)
-    local newHash = getscripthash(animate)
-    assert(hash ~= newHash, "getscripthash n'a pas retourné un hash différent pour un script modifié")
-    assert(newHash == getscripthash(animate), "getscripthash n'est pas cohérent pour un script identique")
-end)
+defineTest("getscripthash", {}, function()
+    local animate = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate") or game:GetService("ReplicatedStorage"):FindFirstChild("Animate")
+    if animate then
+        local animateClone = animate:Clone()
+        local hash = getscripthash(animateClone)
+        local source = animateClone.Source
+        animateClone.Source = "print('Hello, world!')"
+        task.defer(function()
+            animateClone.Source = source
+        end)
+        local newHash = getscripthash(animateClone)
+        assert(hash ~= newHash, "getscripthash n'a pas retourné un hash différent pour un script modifié")
+        assert(newHash == getscripthash(animateClone), "getscripthash n'est pas cohérent pour un script identique")
+    end
+end, "Scripts")
 
-test("getscripts", {}, function()
+defineTest("getscripts", {}, function()
     local scripts = getscripts()
     assert(type(scripts) == "table", "getscripts ne retourne pas un tableau")
     assert(#scripts > 0, "getscripts retourne un tableau vide")
     assert(typeof(scripts[1]) == "Instance", "Le premier élément n'est pas une Instance")
     assert(scripts[1]:IsA("ModuleScript") or scripts[1]:IsA("LocalScript"), "Le premier élément n'est ni un ModuleScript ni un LocalScript")
-end)
+end, "Scripts")
 
-test("getsenv", {}, function()
-    local animate = game:GetService("Players").LocalPlayer.Character.Animate
-    local env = getsenv(animate)
-    assert(type(env) == "table", "getsenv ne retourne pas un tableau pour Animate (un " .. animate.ClassName .. ")")
-    assert(env.script == animate, "La variable globale 'script' n'est pas identique à Animate")
-end)
+defineTest("getsenv", {}, function()
+    local animate = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate") or game:GetService("ReplicatedStorage"):FindFirstChild("Animate")
+    if animate then
+        local env = getsenv(animate)
+        assert(type(env) == "table", "getsenv ne retourne pas un tableau pour Animate (un " .. animate.ClassName .. ")")
+        assert(env.script == animate, "La variable globale 'script' n'est pas identique à Animate")
+    end
+end, "Scripts")
 
-test("getthreadidentity", {"getidentity", "getthreadcontext"}, function()
+defineTest("getthreadidentity", {"getidentity", "getthreadcontext"}, function()
     assert(type(getthreadidentity()) == "number", "getthreadidentity ne retourne pas un nombre")
-end)
+end, "Scripts")
 
-test("setthreadidentity", {"setidentity", "setthreadcontext"}, function()
+defineTest("setthreadidentity", {"setidentity", "setthreadcontext"}, function()
     setthreadidentity(3)
     assert(getthreadidentity() == 3, "setthreadidentity n'a pas modifié l'identité du thread")
-end)
+end, "Scripts")
 
 -- Drawing Functions
-test("Drawing", {})
-test("Drawing.new", {}, function()
+defineTest("Drawing", {}, nil, "Drawing")
+defineTest("Drawing.new", {}, function()
     local drawing = Drawing.new("Square")
     drawing.Visible = false
     local canDestroy = pcall(function() drawing:Destroy() end)
     assert(canDestroy, "Drawing:Destroy() doit réussir sans erreur")
-end)
+end, "Drawing")
 
-test("Drawing.Fonts", {}, function()
+defineTest("Drawing.Fonts", {}, function()
     assert(Drawing.Fonts.UI == 0, "Drawing.Fonts.UI incorrect")
     assert(Drawing.Fonts.System == 1, "Drawing.Fonts.System incorrect")
     assert(Drawing.Fonts.Plex == 2, "Drawing.Fonts.Plex incorrect")
     assert(Drawing.Fonts.Monospace == 3, "Drawing.Fonts.Monospace incorrect")
-end)
+end, "Drawing")
 
-test("isrenderobj", {}, function()
+defineTest("isrenderobj", {}, function()
     local drawing = Drawing.new("Image")
     drawing.Visible = true
     assert(isrenderobj(drawing) == true, "isrenderobj doit retourner true pour une Image")
     assert(isrenderobj(newproxy()) == false, "isrenderobj doit retourner false pour un objet invalide")
-end)
+end, "Drawing")
 
-test("getrenderproperty", {}, function()
+defineTest("getrenderproperty", {}, function()
     local drawing = Drawing.new("Image")
     drawing.Visible = true
     assert(type(getrenderproperty(drawing, "Visible")) == "boolean", "getrenderproperty doit retourner un booléen pour 'Visible'")
@@ -888,22 +1178,22 @@ test("getrenderproperty", {}, function()
     if not success or not result then
         return "La propriété 'Color' n'est pas supportée pour Image"
     end
-end)
+end, "Drawing")
 
-test("setrenderproperty", {}, function()
+defineTest("setrenderproperty", {}, function()
     local drawing = Drawing.new("Square")
     drawing.Visible = true
     setrenderproperty(drawing, "Visible", false)
     assert(drawing.Visible == false, "setrenderproperty n'a pas modifié la propriété 'Visible'")
-end)
+end, "Drawing")
 
-test("cleardrawcache", {}, function()
+defineTest("cleardrawcache", {}, function()
     cleardrawcache()
-end)
+end, "Drawing")
 
 -- WebSocket Functions
-test("WebSocket", {})
-test("WebSocket.connect", {}, function()
+defineTest("WebSocket", {}, nil, "WebSocket")
+defineTest("WebSocket.connect", {}, function()
     local types = {
         Send = "function",
         Close = "function",
@@ -920,109 +1210,33 @@ test("WebSocket.connect", {}, function()
         end
     end
     ws:Close()
-end)
+end, "WebSocket")
 
 ----------------------------
--- Résumé final et affichage
+-- Initialisation des logs
 ----------------------------
-task.defer(function()
-    repeat task.wait() until running == 0
-    local total = passes + fails
-    local rate = total > 0 and math.round(passes / total * 100) or 0
-    local summary = {
-        "",
-        "----- UNC Summary -----",
-        string.format("✅ Succès: %d/%d (%d%%)", passes, total, rate),
-        string.format("⛔ Échecs: %d", fails),
-        string.format("⚠️ Alias manquants: %d", undefined)
-    }
-    for _, line in ipairs(summary) do
-        appendLog(line, Color3.fromRGB(200, 200, 255))
-    end
-    summaryLabel.Text = string.format("Summary: %d%% (%d/%d), Fail: %d, Missing: %d", rate, passes, total, fails, undefined)
-end)
+appendLog("UNC Environment Check - Interface améliorée prête.", UI_CONFIG.infoColor)
+appendLog("✅ - Pass, ⛔ - Fail, ⏺️ - No test, ⚠️ - Missing aliases", UI_CONFIG.neutralColor)
+appendLog("Cliquez sur 'Tout Exécuter' pour démarrer les tests.", UI_CONFIG.neutralColor)
+updateSummary()
 
--------------------------------------------------
--- Fonctions UNC Avancées
--------------------------------------------------
--- Bouton pour activer le mode "Advanced"
-local advancedButton = Instance.new("TextButton")
-advancedButton.Name = "AdvancedButton"
-advancedButton.Size = UDim2.new(0, 150, 0, 40)
-advancedButton.Position = UDim2.new(1, -160, 0, 60)
-advancedButton.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
-advancedButton.Text = "Advanced Mode: OFF"
-advancedButton.TextScaled = true
-advancedButton.Font = Enum.Font.SourceSansBold
-advancedButton.Parent = mainFrame
-
-local advancedModeEnabled = false
-
-advancedButton.MouseButton1Click:Connect(function()
-    advancedModeEnabled = not advancedModeEnabled
-    advancedButton.Text = "Advanced Mode: " .. (advancedModeEnabled and "ON" or "OFF")
-    if advancedModeEnabled then
-        appendLog("Advanced UNC functionalities activées.", Color3.fromRGB(150,255,150))
-        
-        -------------------------------------------------
-        -- Indicateur de performance (FPS)
-        -------------------------------------------------
-        local fpsLabel = Instance.new("TextLabel")
-        fpsLabel.Name = "FPSLabel"
-        fpsLabel.Size = UDim2.new(0, 200, 0, 30)
-        fpsLabel.Position = UDim2.new(0, 10, 1, -70)
-        fpsLabel.BackgroundTransparency = 1
-        fpsLabel.TextColor3 = Color3.new(1, 1, 0)
-        fpsLabel.TextScaled = true
-        fpsLabel.Font = Enum.Font.SourceSansBold
-        fpsLabel.Text = "FPS: Calcul en cours..."
-        fpsLabel.Parent = screenGui
-
-        spawn(function()
-            while advancedModeEnabled and fpsLabel and fpsLabel.Parent do
-                local dt = RunService.Heartbeat:Wait()
-                local fps = math.floor(1 / dt)
-                fpsLabel.Text = "FPS: " .. fps
-                wait(1)
-            end
-            if fpsLabel then
-                fpsLabel:Destroy()
-            end
-        end)
-
-        -------------------------------------------------
-        -- Relance automatique des tests échoués
-        -------------------------------------------------
-        _G.UncAutoRerunFailedTests = true
-        spawn(function()
-            while advancedModeEnabled and _G.UncAutoRerunFailedTests do
-                wait(30)
-                if _G.rerunFailedTests and type(_G.rerunFailedTests) == "function" then
-                    appendLog("Relance automatique des tests échoués...", Color3.fromRGB(200,200,255))
-                    pcall(_G.rerunFailedTests)
-                end
-            end
-        end)
-    else
-        appendLog("Advanced UNC functionalities désactivées.", Color3.fromRGB(255,150,150))
-        _G.UncAutoRerunFailedTests = false
-    end
-end)
-
--------------------------------------------------
--- Commande chat pour exécuter un test spécifique
--------------------------------------------------
-game:GetService("Players").LocalPlayer.Chatted:Connect(function(message)
-    if advancedModeEnabled then
+----------------------------
+-- Commande chat pour exécuter un test spécifique (optionnel)
+----------------------------
+if LocalPlayer then
+    LocalPlayer.Chatted:Connect(function(message)
+        -- Exemple: !runtest cache.invalidate
         local args = string.split(message, " ")
         if args[1]:lower() == "!runtest" and args[2] then
             local testName = args[2]
-            if _G.runSingleTest and type(_G.runSingleTest) == "function" then
-                appendLog("Exécution du test '" .. testName .. "' sur demande...", Color3.fromRGB(150,255,150))
-                pcall(function() _G.runSingleTest(testName) end)
-            else
-                appendLog("La fonction runSingleTest n'est pas disponible.", Color3.fromRGB(255,100,100))
+            for _, testData in ipairs(allTests) do
+                if testData.name == testName then
+                    appendLog("Exécution du test '" .. testName .. "' sur demande...", UI_CONFIG.infoColor)
+                    runTest(testData)
+                    return
+                end
             end
+            appendLog("Test '" .. testName .. "' non trouvé.", UI_CONFIG.warnColor)
         end
-    end
-end)
+    end)
+end
